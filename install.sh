@@ -4,9 +4,11 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 LABEL="me.pecheny.micboost"
+MENU_LABEL="me.pecheny.micboostmenu"
 DIR="$(pwd)"
 CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/micboost"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+MENU_PLIST="$HOME/Library/LaunchAgents/$MENU_LABEL.plist"
 BINDIR="${BINDIR:-/opt/homebrew/bin}"
 
 echo "==> checking BlackHole (virtual audio device)"
@@ -15,16 +17,18 @@ if ! ls /Library/Audio/Plug-Ins/HAL/ 2>/dev/null | grep -qi blackhole; then
   exit 1
 fi
 
-echo "==> building micboost + micboostctl"
+echo "==> building micboost + micboostctl + micboostmenu"
 swiftc -O -framework AudioToolbox -framework CoreAudio -framework Foundation micboost.swift -o micboost
 swiftc -O -framework CoreAudio -framework Foundation micboostctl.swift -o micboostctl
+swiftc -O -framework Cocoa -framework SwiftUI -framework CoreAudio -framework Foundation micboostmenu.swift -o micboostmenu
 
 echo "==> installing config to $CFG_DIR/config (kept if it already exists)"
 mkdir -p "$CFG_DIR"
 [ -f "$CFG_DIR/config" ] || cp config.example "$CFG_DIR/config"
 
-echo "==> linking micboostctl into $BINDIR"
+echo "==> linking micboostctl + micboostmenu into $BINDIR"
 ln -sf "$DIR/micboostctl" "$BINDIR/micboostctl"
+ln -sf "$DIR/micboostmenu" "$BINDIR/micboostmenu"
 
 echo "==> writing launchd agent $PLIST"
 mkdir -p "$(dirname "$PLIST")"
@@ -44,8 +48,28 @@ cat > "$PLIST" <<EOF
 </plist>
 EOF
 
-echo "==> loading agent"
+echo "==> writing menu-bar login agent $MENU_PLIST"
+cat > "$MENU_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>$MENU_LABEL</string>
+    <key>ProgramArguments</key><array><string>$DIR/micboostmenu</string></array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key><string>/tmp/micboostmenu.log</string>
+    <key>StandardErrorPath</key><string>/tmp/micboostmenu.log</string>
+</dict>
+</plist>
+EOF
+
+echo "==> loading agents"
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
+launchctl bootout "gui/$(id -u)/$MENU_LABEL" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$MENU_PLIST"
 
-echo "==> done. Select 'BlackHole 2ch' as your mic in call apps. Tune with: micboostctl show"
+echo "==> done. Select 'BlackHole 2ch' as your mic in call apps."
+echo "    A 🎙 icon is now in your menu bar — click it to pick devices & tune."
+echo "    (Prefer the terminal? micboostctl show / micboostctl --help)"

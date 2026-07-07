@@ -17,7 +17,17 @@ git clone https://gitlab.com/alexander-pecheny/micboost.git
 cd micboost && ./install.sh
 ```
 
-## Tune it — `micboostctl`
+## Tune it — menu bar or terminal
+Two front-ends, same job (edit `~/.config/micboost/config` and hot-restart the agent). Pick either.
+
+### `micboostmenu` — menu-bar app
+A 🎙 icon sits in the menu bar (installed as a login agent, so it comes back after reboot).
+Click it for a panel: pick the input mic / output device from the ones currently connected,
+drag the gain slider, toggle the compressor, expand **Advanced** for threshold / ratio / makeup
+/ attack / release, then hit **Apply** to save + restart the bridge. **Restart** re-applies
+without changes, **Log…** opens the log in Console.
+
+### `micboostctl` — terminal TUI/CLI
 Run it with **no arguments** for an interactive TUI: arrow keys to move, `enter` to pick the
 input mic / output device from the ones currently connected, `←/→` to nudge gain, `space` to
 toggle the compressor, `a` to apply (hot-restarts the agent), `q` to quit.
@@ -66,7 +76,9 @@ tail -f /tmp/micboost.log                          # logs
 cd ~/micboost
 swiftc -O -framework AudioToolbox -framework CoreAudio -framework Foundation micboost.swift -o micboost
 swiftc -O -framework CoreAudio -framework Foundation micboostctl.swift -o micboostctl   # the TUI/CLI
-launchctl kickstart -k gui/$(id -u)/me.pecheny.micboost
+swiftc -O -framework Cocoa -framework SwiftUI -framework CoreAudio -framework Foundation micboostmenu.swift -o micboostmenu   # the menu-bar app
+launchctl kickstart -k gui/$(id -u)/me.pecheny.micboost          # restart the bridge
+launchctl kickstart -k gui/$(id -u)/me.pecheny.micboostmenu      # restart the menu-bar app
 ```
 
 ## How it works
