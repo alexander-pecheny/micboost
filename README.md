@@ -18,10 +18,27 @@ cd micboost && ./install.sh
 ```
 
 ## Tune it — `micboostctl`
-Every change hot-restarts the agent so it applies immediately:
+Run it with **no arguments** for an interactive TUI: arrow keys to move, `enter` to pick the
+input mic / output device from the ones currently connected, `←/→` to nudge gain, `space` to
+toggle the compressor, `a` to apply (hot-restarts the agent), `q` to quit.
+
+```
+  micboost  · device routing & tuning
+
+   ▸ Input  (mic to boost)  Wireless MICRO
+     Output (virtual mic)   BlackHole 2ch
+     Gain                   12 dB
+     Compressor             on
+```
+
+Every CLI subcommand still works for scripting; each hot-restarts the agent immediately:
 
 ```sh
+micboostctl                    # launch the TUI
+micboostctl devices            # list live input/output devices
 micboostctl show               # current settings
+micboostctl input "Wireless"   # pick input mic  (substring match)
+micboostctl output BlackHole   # pick output device
 micboostctl gain 15            # absolute pre-boost, dB
 micboostctl gain +3            # nudge relative
 micboostctl comp off           # pure boost, no compression
@@ -44,9 +61,11 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/me.pecheny.micboost.plis
 tail -f /tmp/micboost.log                          # logs
 ```
 
-## Rebuild after editing micboost.swift
+## Rebuild after editing the Swift sources
 ```sh
-cd ~/micboost && swiftc -O -framework AudioToolbox -framework CoreAudio -framework Foundation micboost.swift -o micboost
+cd ~/micboost
+swiftc -O -framework AudioToolbox -framework CoreAudio -framework Foundation micboost.swift -o micboost
+swiftc -O -framework CoreAudio -framework Foundation micboostctl.swift -o micboostctl   # the TUI/CLI
 launchctl kickstart -k gui/$(id -u)/me.pecheny.micboost
 ```
 

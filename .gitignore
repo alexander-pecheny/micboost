@@ -1,4 +1,5 @@
-# compiled binary
+# compiled binaries
 micboost
+micboostctl
 *.o
 .DS_Store

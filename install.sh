@@ -15,8 +15,9 @@ if ! ls /Library/Audio/Plug-Ins/HAL/ 2>/dev/null | grep -qi blackhole; then
   exit 1
 fi
 
-echo "==> building micboost"
+echo "==> building micboost + micboostctl"
 swiftc -O -framework AudioToolbox -framework CoreAudio -framework Foundation micboost.swift -o micboost
+swiftc -O -framework CoreAudio -framework Foundation micboostctl.swift -o micboostctl
 
 echo "==> installing config to $CFG_DIR/config (kept if it already exists)"
 mkdir -p "$CFG_DIR"
