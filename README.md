@@ -1,13 +1,15 @@
 # micboost
 
-Headless Core Audio bridge: **RODE Wireless Micro → gain + compressor → BlackHole 2ch**.
+A utility that boosts your microphone volume when it's too quiet.
+
+Headless Core Audio bridge: **mic → gain + compressor → BlackHole 2ch**.
 Runs as an always-on `launchd` agent (no GUI, ~0% CPU). Pick **BlackHole 2ch** as your mic
 in Zoom/Meet/Teams/etc. — that's the only manual step.
 
-macOS greys out the input-gain slider for the RODE Wireless Micro (it reports a fixed USB
-output level), so there's no native way to make it louder. This inserts a gain + compressor
-stage between the mic and your call app via a virtual device, with none of the
-Audio-Hijack/Loopback ceremony.
+Some mics report a fixed USB output level, so macOS greys out their input-gain slider and
+there's no native way to make them louder. This inserts a gain + compressor stage between
+the mic and your call app via a virtual device, with none of the Audio-Hijack/Loopback
+ceremony.
 
 ## Install
 Requires [BlackHole 2ch](https://github.com/ExistentialAudio/BlackHole): `brew install blackhole-2ch` (then log out/in).
@@ -80,6 +82,6 @@ launchctl kickstart -k gui/$(id -u)/me.pecheny.micboostmenu      # restart the m
 ```
 
 ## How it works
-Two AUHAL units (RODE in, BlackHole out) linked by a lock-free ring buffer; gain +
+Two AUHAL units (mic in, BlackHole out) linked by a lock-free ring buffer; gain +
 soft-knee compressor + safety limiter run per-sample in the input render callback.
 CPU cost is a fraction of a percent. Config precedence: env var > config file > default.
