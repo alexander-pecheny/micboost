@@ -2,67 +2,24 @@
 
 A utility that boosts your microphone volume when it's too quiet.
 
-Headless Core Audio bridge: **mic → gain + compressor → BlackHole 2ch**.
-Runs as an always-on `launchd` agent (no GUI, ~0% CPU). Pick **BlackHole 2ch** as your mic
-in Zoom/Meet/Teams/etc. — that's the only manual step.
-
-Some mics report a fixed USB output level, so macOS greys out their input-gain slider and
-there's no native way to make them louder. This inserts a gain + compressor stage between
-the mic and your call app via a virtual device, with none of the Audio-Hijack/Loopback
-ceremony.
+Technically it is a headless Core Audio bridge: **mic → gain + compressor → BlackHole 2ch** that runs as an always-on `launchd` agent. To use the boosted mic, you need to pick **BlackHole 2ch** as your input device in e.g. Google Meet or Teams.
 
 ## Install
-Requires [BlackHole 2ch](https://github.com/ExistentialAudio/BlackHole): `brew install blackhole-2ch` (then log out/in).
 
-```sh
-git clone https://gitlab.com/alexander-pecheny/micboost.git
-cd micboost && ./install.sh
-```
+1. `brew install blackhole-2ch`
+2. Restart
+3. 
+   ```sh
+   git clone https://gitlab.com/alexander-pecheny/micboost.git
+   cd micboost && ./install.sh
+   ```
 
-## Tune it — menu bar or terminal
-Two front-ends over the same `~/.config/micboost/config`; every change hot-restarts the agent.
+## Settings
 
-### `micboostmenu` — menu-bar app
-A 🎙 icon in the menu bar (a login agent, so it survives reboots). Click it to pick input/output
-devices, set gain, toggle the compressor, or expand **Advanced** for threshold / ratio / makeup /
-attack / release. **Apply** saves and restarts the bridge; **Restart** re-applies unchanged;
-**Log…** opens the log in Console.
+Settings come in two flavors: `micboostmenu`, a menu-bar app, and `micboostctl` – terminal TUI/CLI (useful e.g. for agents).
 
-### `micboostctl` — terminal TUI/CLI
-Run with **no arguments** for a TUI: arrows move, `enter` picks a device, `←/→` nudge gain,
-`space` toggles the compressor, `a` applies, `q` quits.
 
-```
-  micboost  · device routing & tuning
-
-   ▸ Input  (mic to boost)  Wireless MICRO
-     Output (virtual mic)   BlackHole 2ch
-     Gain                   12 dB
-     Compressor             on
-```
-
-Every CLI subcommand still works for scripting; each hot-restarts the agent immediately:
-
-```sh
-micboostctl                    # launch the TUI
-micboostctl devices            # list live input/output devices
-micboostctl show               # current settings
-micboostctl input "Wireless"   # pick input mic  (substring match)
-micboostctl output BlackHole   # pick output device
-micboostctl gain 15            # absolute pre-boost, dB
-micboostctl gain +3            # nudge relative
-micboostctl comp off           # pure boost, no compression
-micboostctl ratio 3            # gentler compression
-micboostctl threshold -20      # compress sooner/later
-micboostctl makeup 8           # post-compressor makeup gain
-micboostctl set KEY VALUE      # any raw key
-micboostctl status | log       # launchd status / tail log
-```
-
-Too quiet still? Raise `gain`. Voice pumping/uneven? Lower `ratio` or raise `threshold`.
-Or edit `~/.config/micboost/config` by hand and `micboostctl restart`.
-
-## Control
+## Useful commands
 ```sh
 launchctl print gui/$(id -u)/me.pecheny.micboost   # status
 launchctl kickstart -k gui/$(id -u)/me.pecheny.micboost   # restart (after config/rebuild)
@@ -80,8 +37,3 @@ swiftc -O -framework Cocoa -framework SwiftUI -framework CoreAudio -framework Fo
 launchctl kickstart -k gui/$(id -u)/me.pecheny.micboost          # restart the bridge
 launchctl kickstart -k gui/$(id -u)/me.pecheny.micboostmenu      # restart the menu-bar app
 ```
-
-## How it works
-Two AUHAL units (mic in, BlackHole out) linked by a lock-free ring buffer; gain +
-soft-knee compressor + safety limiter run per-sample in the input render callback.
-CPU cost is a fraction of a percent. Config precedence: env var > config file > default.
