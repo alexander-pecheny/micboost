@@ -1,0 +1,4 @@
+# compiled binary
+micboost
+*.o
+.DS_Store

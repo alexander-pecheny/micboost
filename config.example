@@ -1,0 +1,18 @@
+# micboost config — RODE -> gain + compressor -> BlackHole
+# Copied to ~/.config/micboost/config on install. Edit with `micboostctl` or by hand.
+# Lines are KEY=VALUE. '#' starts a comment. Env vars of the same name win over this file.
+
+# --- gain ---
+GAIN_DB=12          # fixed pre-boost applied to the mic, in dB. Raise if still too quiet.
+
+# --- compressor (evens out loud/quiet speech; great for calls) ---
+COMP=1              # 1 = on, 0 = off (pure gain only)
+THRESH_DB=-18       # level above which compression kicks in
+RATIO=4             # 4 means 4 dB in -> 1 dB out above threshold
+MAKEUP_DB=6         # volume added back after compressing
+ATTACK_MS=5         # how fast it clamps a rising signal
+RELEASE_MS=150      # how fast it lets go
+
+# --- devices (substring match; usually no need to touch) ---
+RODE_NAME=Wireless MICRO
+OUT_NAME=BlackHole
