@@ -18,19 +18,17 @@ cd micboost && ./install.sh
 ```
 
 ## Tune it — menu bar or terminal
-Two front-ends, same job (edit `~/.config/micboost/config` and hot-restart the agent). Pick either.
+Two front-ends over the same `~/.config/micboost/config`; every change hot-restarts the agent.
 
 ### `micboostmenu` — menu-bar app
-A 🎙 icon sits in the menu bar (installed as a login agent, so it comes back after reboot).
-Click it for a panel: pick the input mic / output device from the ones currently connected,
-drag the gain slider, toggle the compressor, expand **Advanced** for threshold / ratio / makeup
-/ attack / release, then hit **Apply** to save + restart the bridge. **Restart** re-applies
-without changes, **Log…** opens the log in Console.
+A 🎙 icon in the menu bar (a login agent, so it survives reboots). Click it to pick input/output
+devices, set gain, toggle the compressor, or expand **Advanced** for threshold / ratio / makeup /
+attack / release. **Apply** saves and restarts the bridge; **Restart** re-applies unchanged;
+**Log…** opens the log in Console.
 
 ### `micboostctl` — terminal TUI/CLI
-Run it with **no arguments** for an interactive TUI: arrow keys to move, `enter` to pick the
-input mic / output device from the ones currently connected, `←/→` to nudge gain, `space` to
-toggle the compressor, `a` to apply (hot-restarts the agent), `q` to quit.
+Run with **no arguments** for a TUI: arrows move, `enter` picks a device, `←/→` nudge gain,
+`space` toggles the compressor, `a` applies, `q` quits.
 
 ```
   micboost  · device routing & tuning

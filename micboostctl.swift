@@ -352,7 +352,6 @@ func need(_ args: [String], _ n: Int, _ msg: String) {
     if args.count < n { FileHandle.standardError.write((msg + "\n").data(using: .utf8)!); exit(1) }
 }
 
-// setKV + echo + apply
 func put(_ cfg: Config, _ k: String, _ v: String, _ echo: String) {
     cfg.set(k, v); cfg.save(); print(echo); apply()
 }
