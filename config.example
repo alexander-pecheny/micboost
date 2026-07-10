@@ -1,9 +1,17 @@
-# micboost config — RODE -> gain + compressor -> BlackHole
+# micboost config — mic -> high-pass -> denoise -> gain -> compressor -> limiter -> BlackHole
 # Copied to ~/.config/micboost/config on install. Edit with `micboostctl` or by hand.
 # Lines are KEY=VALUE. '#' starts a comment. Env vars of the same name win over this file.
 
 # --- gain ---
 GAIN_DB=12          # fixed pre-boost applied to the mic, in dB. Raise if still too quiet.
+
+# --- high-pass (rumble, HVAC, desk thumps, plosives) ---
+HPF_HZ=80           # cutoff in Hz, 0 = off. 12 dB/oct. Raise to ~100 for a boomy room.
+
+# --- output limiter (replaces hard clipping) ---
+LIMIT_MS=1.5        # look-ahead in ms, 0 = hard clip. This is the only latency it adds.
+LIMIT_RELEASE_MS=80 # how fast the limiter lets go
+CEIL_DB=-0.5        # output ceiling in dBFS
 
 # --- compressor (evens out loud/quiet speech; great for calls) ---
 COMP=1              # 1 = on, 0 = off (pure gain only)
@@ -12,6 +20,15 @@ RATIO=4             # 4 means 4 dB in -> 1 dB out above threshold
 MAKEUP_DB=6         # volume added back after compressing
 ATTACK_MS=5         # how fast it clamps a rising signal
 RELEASE_MS=150      # how fast it lets go
+
+# --- noise suppression (subtracts a recorded noise profile from the signal) ---
+# Record the profile with `micboostctl nr capture` or the menu-bar button — NR stays off
+# until one exists. It lives next to this file, in noise.profile.
+NR=0                # 1 = on, 0 = off
+NR_ALPHA=2          # over-subtraction: higher removes more noise, more artifacts
+NR_FLOOR=0.06       # how much noise is left behind (0 = none, and it sounds robotic)
+NR_SMOOTH=0.5       # per-bin gain smoothing; raise if you hear warbling
+NR_CAPTURE_SEC=6    # how long a capture listens
 
 # --- devices (substring match; usually no need to touch) ---
 RODE_NAME=Wireless MICRO
