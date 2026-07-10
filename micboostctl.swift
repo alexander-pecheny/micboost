@@ -17,6 +17,8 @@ let DOMAIN = "gui/\(getuid())/\(LABEL)"
 let LOG    = "/tmp/micboost.log"
 let CONFIG_PATH = (ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]
                    ?? NSHomeDirectory() + "/.config") + "/micboost/config"
+let PROFILE_PATH = (CONFIG_PATH as NSString).deletingLastPathComponent + "/noise.profile"
+let STATUS_PATH  = "/tmp/micboost.status"
 
 @discardableResult
 func run(_ path: String, _ args: [String], capture: Bool = false) -> String {
@@ -36,6 +38,47 @@ func run(_ path: String, _ args: [String], capture: Bool = false) -> String {
 }
 
 func apply() { run("/bin/launchctl", ["kickstart", "-k", DOMAIN]) }
+
+// ============================ noise profile ============================
+func agentPID() -> pid_t? {
+    for line in run("/bin/launchctl", ["print", DOMAIN], capture: true).split(separator: "\n") {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("pid = ") { return pid_t(t.dropFirst(6).trimmingCharacters(in: .whitespaces)) }
+    }
+    return nil
+}
+
+func hasProfile() -> Bool { FileManager.default.fileExists(atPath: PROFILE_PATH) }
+
+func profileMTime() -> Date? {
+    let a = try? FileManager.default.attributesOfItem(atPath: PROFILE_PATH)
+    return a?[.modificationDate] as? Date
+}
+
+func nrState() -> String {
+    guard let s = try? String(contentsOfFile: STATUS_PATH, encoding: .utf8) else { return "unknown" }
+    for line in s.split(separator: "\n") where line.hasPrefix("nr=") { return String(line.dropFirst(3)) }
+    return "unknown"
+}
+
+func captureSeconds(_ cfg: Config) -> Double { Double(cfg.get("NR_CAPTURE_SEC") ?? "") ?? 6 }
+
+// Ask the running daemon (SIGUSR1) to sample the room, then wait for the profile file to land.
+// `tick` is called roughly every 0.2 s with the seconds remaining, for progress display.
+func captureProfile(_ cfg: Config, tick: (Double) -> Void = { _ in }) -> String? {
+    guard let pid = agentPID() else { return "micboost is not running" }
+    let before = profileMTime()
+    guard kill(pid, SIGUSR1) == 0 else { return "could not signal micboost (pid \(pid))" }
+
+    let secs = captureSeconds(cfg)
+    let deadline = Date().addingTimeInterval(secs + 5)
+    while Date() < deadline {
+        tick(max(0, deadline.timeIntervalSinceNow - 5))
+        Thread.sleep(forTimeInterval: 0.2)
+        if let m = profileMTime(), m != before { return nil }
+    }
+    return "timed out waiting for the noise profile"
+}
 
 // ============================ config file ============================
 // Order-preserving KEY=VALUE store that keeps blank lines, comments, and inline comments.
@@ -142,11 +185,11 @@ final class TUI {
     var savedTermios = termios()
 
     // staged vs. saved snapshots
-    var inDev: String, outDev: String, gain: Double, comp: Bool
-    var oInDev: String, oOutDev: String, oGain: Double, oComp: Bool   // last-saved snapshot
+    var inDev: String, outDev: String, gain: Double, comp: Bool, nr: Bool
+    var oInDev: String, oOutDev: String, oGain: Double, oComp: Bool, oNr: Bool   // last-saved snapshot
     var status = ""
 
-    enum Row: Int, CaseIterable { case input, output, gain, comp }
+    enum Row: Int, CaseIterable { case input, output, gain, comp, nr, capture }
     var cur: Row = .input
 
     init(_ cfg: Config) {
@@ -157,10 +200,11 @@ final class TUI {
         outDev = resolve(rawOut, input: false) ?? rawOut
         gain   = Double(cfg.get("GAIN_DB") ?? "") ?? 12
         comp   = (cfg.get("COMP") ?? "1") != "0"
-        oInDev = inDev; oOutDev = outDev; oGain = gain; oComp = comp
+        nr     = (cfg.get("NR") ?? "0") != "0"
+        oInDev = inDev; oOutDev = outDev; oGain = gain; oComp = comp; oNr = nr
     }
 
-    var dirty: Bool { inDev != oInDev || outDev != oOutDev || gain != oGain || comp != oComp }
+    var dirty: Bool { inDev != oInDev || outDev != oOutDev || gain != oGain || comp != oComp || nr != oNr }
 
     // ---- raw terminal ----
     func enterRaw() {
@@ -228,6 +272,8 @@ final class TUI {
         case .output: return outDev
         case .gain:   return "\(fmtNum(gain)) dB"
         case .comp:   return comp ? "on" : "off"
+        case .nr:     return nr ? (hasProfile() ? "on" : "on — no profile yet") : "off"
+        case .capture: return hasProfile() ? "profile recorded · enter to redo" : "enter to record"
         }
     }
     func rowLabel(_ r: Row) -> String {
@@ -236,6 +282,27 @@ final class TUI {
         case .output: return "Output (virtual mic)"
         case .gain:   return "Gain"
         case .comp:   return "Compressor"
+        case .nr:     return "Noise suppression"
+        case .capture: return "Noise profile"
+        }
+    }
+
+    // Records the room with the daemon while the user stays quiet; NR is switched on afterwards.
+    func doCapture() {
+        clear()
+        write("\n  \(c.bold)\(c.cyan)Recording noise profile\(c.off)\n\n")
+        write("  \(c.dim)Stay silent. Leave the room exactly as it is during calls\n")
+        write("  (fans, laptop, street) — that is what gets subtracted.\(c.off)\n\n")
+        let err = captureProfile(cfg) { left in
+            self.write(String(format: "\r  \(self.c.yellow)● recording… %.1fs\(self.c.off)   ", left))
+        }
+        if let err {
+            status = "capture failed: \(err)"
+        } else {
+            cfg.set("NR", "1"); cfg.save()
+            apply()                          // restart to apply, like every other change
+            nr = true; oNr = true
+            status = "noise profile captured — suppression is on"
         }
     }
 
@@ -250,7 +317,7 @@ final class TUI {
         write("\n")
         if dirty { write("  \(c.yellow)● unsaved\(c.off) — press \(c.bold)a\(c.off) to apply\n") }
         else     { write("  \(c.green)✓ in sync with running micboost\(c.off)\n") }
-        write("\n  \(c.dim)↑/↓ move · enter change · ←/→ gain · space toggle comp · a apply · q quit\(c.off)\n")
+        write("\n  \(c.dim)↑/↓ move · enter change · ←/→ gain · space toggle · a apply · q quit\(c.off)\n")
         if !status.isEmpty { write("\n  \(c.green)\(status)\(c.off)\n") }
     }
 
@@ -267,8 +334,9 @@ final class TUI {
         guard dirty else { status = "nothing to apply"; return }
         cfg.set("RODE_NAME", inDev); cfg.set("OUT_NAME", outDev)
         cfg.set("GAIN_DB", fmtNum(gain)); cfg.set("COMP", comp ? "1" : "0")
+        cfg.set("NR", nr ? "1" : "0")
         cfg.save(); apply()
-        oInDev = inDev; oOutDev = outDev; oGain = gain; oComp = comp   // now the saved baseline
+        oInDev = inDev; oOutDev = outDev; oGain = gain; oComp = comp; oNr = nr   // saved baseline
         status = "applied → micboost restarted"
     }
 
@@ -292,10 +360,13 @@ final class TUI {
                 case .input:  choose(input: true)
                 case .output: choose(input: false)
                 case .comp:   comp.toggle()
+                case .nr:     nr.toggle()
                 case .gain:   gain += 1
+                case .capture: doCapture()
                 }
             case .space:
                 if cur == .comp { comp.toggle() }
+                if cur == .nr   { nr.toggle() }
             case .right, .char("+"), .char("="):
                 if cur == .gain { gain += 1 }
             case .left, .char("-"):
@@ -315,8 +386,45 @@ final class TUI {
 // ============================ CLI ============================
 func cliShow(_ cfg: Config) {
     print("config: \(CONFIG_PATH)")
-    for k in ["GAIN_DB","COMP","THRESH_DB","RATIO","MAKEUP_DB","ATTACK_MS","RELEASE_MS","RODE_NAME","OUT_NAME"] {
-        print(String(format: "  %-11s %@", (k as NSString).utf8String!, (cfg.get(k) ?? "<default>") as NSString))
+    for k in ["GAIN_DB","HPF_HZ","COMP","THRESH_DB","RATIO","MAKEUP_DB","ATTACK_MS","RELEASE_MS",
+              "LIMIT_MS","LIMIT_RELEASE_MS","CEIL_DB",
+              "NR","NR_ALPHA","NR_FLOOR","NR_SMOOTH","NR_CAPTURE_SEC","RODE_NAME","OUT_NAME"] {
+        print(String(format: "  %-15s %@", (k as NSString).utf8String!, (cfg.get(k) ?? "<default>") as NSString))
+    }
+    print("  noise profile   \(hasProfile() ? PROFILE_PATH : "<none — run `micboostctl nr capture`>")")
+    print("  live state      nr=\(nrState())")
+}
+
+func cliNR(_ cfg: Config, _ argv: [String]) {
+    switch argv.count >= 2 ? argv[1] : "show" {
+    case "show":
+        print("NR = \(cfg.get("NR") ?? "0")   live: nr=\(nrState())")
+        print("profile: \(hasProfile() ? PROFILE_PATH : "none — run `micboostctl nr capture`")")
+    case "on", "1":
+        if !hasProfile() { print("warning: no noise profile yet — record one with `micboostctl nr capture`") }
+        put(cfg, "NR", "1", "NR = 1")
+    case "off", "0":
+        put(cfg, "NR", "0", "NR = 0")
+    case "clear":
+        try? FileManager.default.removeItem(atPath: PROFILE_PATH)
+        put(cfg, "NR", "0", "noise profile cleared, NR = 0")
+    case "capture":
+        let secs = captureSeconds(cfg)
+        print("Recording \(fmtNum(secs))s of room noise — stay silent…")
+        var lastShown = -1.0
+        let err = captureProfile(cfg) { left in
+            let s = (left * 10).rounded() / 10
+            if s != lastShown { lastShown = s; print(String(format: "\r  %.1fs remaining ", left), terminator: ""); fflush(stdout) }
+        }
+        print("\r                          \r", terminator: "")
+        if let err {
+            FileHandle.standardError.write("capture failed: \(err)\n".data(using: .utf8)!); exit(1)
+        }
+        cfg.set("NR", "1"); cfg.save()
+        apply()
+        print("noise profile captured → \(PROFILE_PATH)\nnoise suppression is on")
+    default:
+        FileHandle.standardError.write("usage: micboostctl nr [show|on|off|capture|clear]\n".data(using: .utf8)!); exit(1)
     }
 }
 
@@ -337,6 +445,12 @@ func usage() {
       micboostctl gain <dB>            set absolute pre-boost    (e.g. gain 15)
       micboostctl gain +3 | -2         nudge boost relative
       micboostctl comp on | off        compressor on/off
+
+      micboostctl nr                   show noise-suppression state
+      micboostctl nr capture           record a noise profile (stay silent for ~6s)
+      micboostctl nr on | off          noise suppression on/off
+      micboostctl nr clear             forget the profile and switch NR off
+
       micboostctl threshold <dB>       compressor threshold      (e.g. -18)
       micboostctl ratio <x>            compressor ratio          (e.g. 4)
       micboostctl makeup <dB>          post-compressor makeup gain
@@ -404,6 +518,8 @@ case "comp":
     case "off", "0": put(cfg, "COMP", "0", "COMP = 0")
     default: FileHandle.standardError.write("usage: micboostctl comp on|off\n".data(using: .utf8)!); exit(1)
     }
+
+case "nr": cliNR(cfg, argv)
 
 case "threshold": need(argv, 2, "usage: micboostctl threshold <dB>"); put(cfg, "THRESH_DB", argv[1], "THRESH_DB = \(argv[1]) dB")
 case "ratio":     need(argv, 2, "usage: micboostctl ratio <x>");      put(cfg, "RATIO", argv[1], "RATIO = \(argv[1])")

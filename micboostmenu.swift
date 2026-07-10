@@ -19,6 +19,7 @@ let DOMAIN = "gui/\(getuid())/\(LABEL)"
 let LOG    = "/tmp/micboost.log"
 let CONFIG_PATH = (ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]
                    ?? NSHomeDirectory() + "/.config") + "/micboost/config"
+let PROFILE_PATH = (CONFIG_PATH as NSString).deletingLastPathComponent + "/noise.profile"
 
 @discardableResult
 func run(_ path: String, _ args: [String], capture: Bool = false) -> String {
@@ -38,6 +39,21 @@ func run(_ path: String, _ args: [String], capture: Bool = false) -> String {
 }
 
 func kickstart() { run("/bin/launchctl", ["kickstart", "-k", DOMAIN]) }
+
+func agentPID() -> pid_t? {
+    for line in run("/bin/launchctl", ["print", DOMAIN], capture: true).split(separator: "\n") {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("pid = ") { return pid_t(t.dropFirst(6).trimmingCharacters(in: .whitespaces)) }
+    }
+    return nil
+}
+
+func hasProfile() -> Bool { FileManager.default.fileExists(atPath: PROFILE_PATH) }
+
+func profileMTime() -> Date? {
+    let a = try? FileManager.default.attributesOfItem(atPath: PROFILE_PATH)
+    return a?[.modificationDate] as? Date
+}
 
 func agentStatus() -> String {
     let out = run("/bin/launchctl", ["print", DOMAIN], capture: true)
@@ -158,6 +174,7 @@ final class Model: ObservableObject {
     @Published var makeup = 6.0
     @Published var attack = 5.0
     @Published var release = 150.0
+    @Published var nr     = false
 
     // live device lists (refreshed when the popover opens)
     @Published var inputs:  [String] = []
@@ -165,6 +182,11 @@ final class Model: ObservableObject {
 
     @Published var statusLine = ""
     @Published var appliedNote = ""
+
+    // noise-profile capture
+    @Published var profileExists = false
+    @Published var capturing = false
+    @Published var captureLeft = 0.0
 
     // last-applied baseline for the dirty check
     private var base: [String: String] = [:]
@@ -186,6 +208,8 @@ final class Model: ObservableObject {
         makeup = d("MAKEUP_DB", 6)
         attack = d("ATTACK_MS", 5)
         release = d("RELEASE_MS", 150)
+        nr     = (cfg.get("NR") ?? "0") != "0"
+        profileExists = hasProfile()
         snapshot()
         statusLine = agentStatus()
     }
@@ -203,10 +227,17 @@ final class Model: ObservableObject {
          "GAIN_DB": fmtNum(gain), "COMP": comp ? "1" : "0",
          "THRESH_DB": fmtNum(thresh), "RATIO": fmtNum(ratio),
          "MAKEUP_DB": fmtNum(makeup), "ATTACK_MS": fmtNum(attack),
-         "RELEASE_MS": fmtNum(release)]
+         "RELEASE_MS": fmtNum(release), "NR": nr ? "1" : "0"]
     }
     private func snapshot() { base = staged }
     var dirty: Bool { staged != base }
+
+    var captureSecs: Double { Double(cfg.get("NR_CAPTURE_SEC") ?? "") ?? 6 }
+
+    private func flash(_ msg: String) {
+        appliedNote = msg
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in self?.appliedNote = "" }
+    }
 
     func apply() {
         for (k, v) in staged { cfg.set(k, v) }
@@ -215,15 +246,45 @@ final class Model: ObservableObject {
         snapshot()
         objectWillChange.send()
         statusLine = agentStatus()
-        appliedNote = "Applied — micboost restarted"
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in self?.appliedNote = "" }
+        flash("Applied — micboost restarted")
     }
 
     func restart() {
         kickstart()
         statusLine = agentStatus()
-        appliedNote = "Restarted micboost"
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in self?.appliedNote = "" }
+        flash("Restarted micboost")
+    }
+
+    // SIGUSR1 tells the running daemon to sample the room; it drops a profile file when done.
+    func captureNoise() {
+        let before = profileMTime()
+        guard let pid = agentPID(), kill(pid, SIGUSR1) == 0 else {
+            flash("micboost is not running")
+            return
+        }
+        capturing = true
+        captureLeft = captureSecs
+        let deadline = Date().addingTimeInterval(captureSecs + 5)
+        let t = Timer(timeInterval: 0.2, repeats: true) { [weak self] timer in
+            guard let self else { timer.invalidate(); return }
+            self.captureLeft = max(0, deadline.timeIntervalSinceNow - 5)
+            if let m = profileMTime(), m != before {
+                timer.invalidate()
+                self.capturing = false
+                self.profileExists = true
+                self.nr = true
+                self.cfg.set("NR", "1"); self.cfg.save()
+                self.base["NR"] = "1"
+                kickstart()                              // restart to apply, like every other change
+                self.statusLine = agentStatus()
+                self.flash("Noise profile captured — suppression on")
+            } else if Date() >= deadline {
+                timer.invalidate()
+                self.capturing = false
+                self.flash("Capture timed out")
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)   // keep ticking while the popover tracks the mouse
     }
 
     func openLog() {
@@ -301,6 +362,30 @@ struct Panel: View {
 
             Divider()
 
+            // noise suppression
+            Toggle(isOn: $m.nr) { Text("Noise suppression") }
+                .toggleStyle(.switch)
+                .disabled(!m.profileExists)
+
+            if m.capturing {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(String(format: "Recording noise… %.1fs — stay silent", m.captureLeft))
+                        .font(.caption).foregroundColor(.secondary)
+                }
+            } else {
+                HStack(spacing: 8) {
+                    Button(m.profileExists ? "Re-record noise profile" : "Capture noise profile") {
+                        m.captureNoise()
+                    }
+                    if !m.profileExists {
+                        Text("no profile yet").font(.caption).foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            Divider()
+
             HStack {
                 if !m.appliedNote.isEmpty {
                     Label(m.appliedNote, systemImage: "checkmark.circle.fill")
@@ -315,7 +400,7 @@ struct Panel: View {
                 Spacer()
                 Button("Apply") { m.apply() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!m.dirty)
+                    .disabled(!m.dirty || m.capturing)   // a restart would abort the capture
             }
 
             HStack {

@@ -18,7 +18,7 @@ if ! ls /Library/Audio/Plug-Ins/HAL/ 2>/dev/null | grep -qi blackhole; then
 fi
 
 echo "==> building micboost + micboostctl + micboostmenu"
-swiftc -O -framework AudioToolbox -framework CoreAudio -framework Foundation micboost.swift -o micboost
+swiftc -O -framework AudioToolbox -framework CoreAudio -framework Accelerate -framework Foundation micboost.swift -o micboost
 swiftc -O -framework CoreAudio -framework Foundation micboostctl.swift -o micboostctl
 swiftc -O -framework Cocoa -framework SwiftUI -framework CoreAudio -framework Foundation micboostmenu.swift -o micboostmenu
 
