@@ -1,3 +1,5 @@
+> **The main repository of this project lives at https://code.pecheny.me/pecheny/micboost. All issues should be created there.**
+
 # micboost
 
 A utility that boosts your microphone volume when it's too quiet.
