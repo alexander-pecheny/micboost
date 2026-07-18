@@ -14,7 +14,7 @@ Latency added: **1.5 ms** normally, **17.5 ms** with noise suppression on.
 2. Restart
 3. 
    ```sh
-   git clone https://gitlab.com/alexander-pecheny/micboost.git
+   git clone https://code.pecheny.me/pecheny/micboost
    cd micboost && ./install.sh
    ```
 
