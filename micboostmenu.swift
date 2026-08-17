@@ -475,6 +475,10 @@ final class Model: ObservableObject {
 }
 
 // ============================ views ============================
+/// Every labelled control row is this tall. A picker is intrinsically taller than a slider or a
+/// switch, which left the baselines unevenly spaced and read as inconsistent type.
+let ROW_HEIGHT: CGFloat = 24
+
 struct SliderRow: View {
     let label: String
     @Binding var value: Double
@@ -488,7 +492,7 @@ struct SliderRow: View {
             Text("\(fmtNum(value))\(unit.isEmpty ? "" : " " + unit)")
                 .font(.system(.caption, design: .monospaced))
                 .frame(width: 58, alignment: .trailing)
-        }.font(.callout)
+        }.font(.callout).frame(height: ROW_HEIGHT)
     }
 }
 
@@ -559,16 +563,17 @@ struct MicboostSection: View {
                     Picker("", selection: $m.inDev) {
                         ForEach(m.inputs, id: \.self) { Text($0).tag($0) }
                     }.labelsHidden()
-                }.font(.callout)
+                }.font(.callout).frame(height: ROW_HEIGHT)
                 HStack(spacing: 8) {
                     Text("Output").frame(width: 74, alignment: .leading)
                     Picker("", selection: $m.outDev) {
                         ForEach(m.outputs, id: \.self) { Text($0).tag($0) }
                     }.labelsHidden()
-                }.font(.callout)
+                }.font(.callout).frame(height: ROW_HEIGHT)
 
                 SliderRow(label: "Gain", value: $m.gain, range: -6...30, step: 1, unit: "dB")
-                Toggle(isOn: $m.comp) { Text("Compressor").font(.callout) }.toggleStyle(.switch)
+                Toggle(isOn: $m.comp) { Text("Compressor").font(.callout) }
+                    .toggleStyle(.switch).frame(height: ROW_HEIGHT)
 
                 if m.comp {
                     // Not a DisclosureGroup: the stock one toggles on its chevron alone, so the
@@ -588,6 +593,7 @@ struct MicboostSection: View {
 
                 Toggle(isOn: $m.nr) { Text("Noise suppression").font(.callout) }
                     .toggleStyle(.switch)
+                    .frame(height: ROW_HEIGHT)
                     .disabled(!m.profileExists)
 
                 if m.capturing {
@@ -695,7 +701,7 @@ struct RecordingSection: View {
                         Text("Lossless — FLAC").tag("flac")
                         Text("Lossy — AAC 256k").tag("aac")
                     }.labelsHidden().disabled(r.recording)
-                }.font(.callout)
+                }.font(.callout).frame(height: ROW_HEIGHT)
 
                 if !r.lastError.isEmpty {
                     Label(r.lastError, systemImage: "exclamationmark.triangle.fill")
