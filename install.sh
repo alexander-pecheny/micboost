@@ -17,18 +17,23 @@ if ! ls /Library/Audio/Plug-Ins/HAL/ 2>/dev/null | grep -qi blackhole; then
   exit 1
 fi
 
-echo "==> building micboost + micboostctl + micboostmenu"
+echo "==> building micboost + micboostctl + micboostmenu + micrec"
 swiftc -O -framework AudioToolbox -framework CoreAudio -framework Accelerate -framework Foundation micboost.swift -o micboost
 swiftc -O -framework CoreAudio -framework Foundation micboostctl.swift -o micboostctl
 swiftc -O -framework Cocoa -framework SwiftUI -framework CoreAudio -framework Foundation micboostmenu.swift -o micboostmenu
+swiftc -O -framework AVFoundation -framework CoreAudio -framework AudioToolbox -framework AppKit -framework Foundation micrec.swift -o micrec
 
 echo "==> installing config to $CFG_DIR/config (kept if it already exists)"
 mkdir -p "$CFG_DIR"
 [ -f "$CFG_DIR/config" ] || cp config.example "$CFG_DIR/config"
 
-echo "==> linking micboostctl + micboostmenu into $BINDIR"
+echo "==> linking micboostctl + micboostmenu + micrec into $BINDIR"
 ln -sf "$DIR/micboostctl" "$BINDIR/micboostctl"
 ln -sf "$DIR/micboostmenu" "$BINDIR/micboostmenu"
+ln -sf "$DIR/micrec" "$BINDIR/micrec"
+
+echo "==> recordings go to $HOME/Documents/MicboostRecordings"
+mkdir -p "$HOME/Documents/MicboostRecordings"
 
 echo "==> writing launchd agent $PLIST"
 mkdir -p "$(dirname "$PLIST")"
@@ -65,11 +70,18 @@ cat > "$MENU_PLIST" <<EOF
 EOF
 
 echo "==> loading agents"
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
-launchctl bootout "gui/$(id -u)/$MENU_LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$MENU_PLIST"
+# launchd reports EIO if we bootstrap while the old job is still winding down, so retry briefly
+reload() {
+  launchctl bootout "gui/$(id -u)/$1" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6; do
+    launchctl bootstrap "gui/$(id -u)" "$2" 2>/dev/null && return 0
+    sleep 0.5
+  done
+  echo "!! could not load $1"
+}
+reload "$LABEL" "$PLIST"
+reload "$MENU_LABEL" "$MENU_PLIST"
 
-echo "==> done. Select 'BlackHole 2ch' as your mic in call apps."
-echo "    A 🎙 icon is now in your menu bar — click it to pick devices & tune."
-echo "    (Prefer the terminal? micboostctl show / micboostctl --help)"
+echo "==> done. Select 'BlackHole 2ch' as your mic in call apps — micboost switches itself on."
+echo "    A 🎙 icon is now in your menu bar: micboost settings and Recording."
+echo "    (Prefer the terminal? micboostctl show / micrec --help)"

@@ -33,3 +33,7 @@ NR_CAPTURE_SEC=6    # how long a capture listens
 # --- devices (substring match; usually no need to touch) ---
 RODE_NAME=Wireless MICRO
 OUT_NAME=BlackHole
+
+# --- recording (micrec; the menu bar writes these for you) ---
+REC_FORMAT=flac     # flac = lossless, aac = 256 kbit/s
+REC_SOURCES=mic     # comma-separated: mic, system, app:<bundle id>

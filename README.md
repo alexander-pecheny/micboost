@@ -2,11 +2,13 @@
 
 # micboost
 
-A utility that boosts your microphone volume when it's too quiet.
+Two tools behind one menu-bar icon: a microphone booster and a recorder.
 
-Technically it is a headless Core Audio bridge: **mic → high-pass → noise suppression → gain → compressor → limiter → BlackHole 2ch** that runs as an always-on `launchd` agent. To use the boosted mic, you need to pick **BlackHole 2ch** as your input device in e.g. Google Meet or Teams.
+**micboost** boosts your microphone when it's too quiet. Technically it is a headless Core Audio bridge: **mic → high-pass → noise suppression → gain → compressor → limiter → BlackHole 2ch** running as a `launchd` agent. Pick **BlackHole 2ch** as your input device in Meet or Teams and the bridge switches itself on; pick anything else and it switches off.
 
 Latency added: **1.5 ms** normally, **17.5 ms** with noise suppression on.
+
+**micrec** records your mic together with any app or the whole system, as separate stems that cannot drift apart. See [Recording](#recording).
 
 ## Install
 
@@ -34,6 +36,29 @@ micboostctl nr off        # back to raw
 Or press **Capture noise profile** in the menu-bar app. Adds 16 ms of latency while active. Turn `NR_ALPHA` up (or `NR_FLOOR` down) in the config for more aggressive removal, at the cost of a watery/warbly artifact on speech.
 
 
+## Recording
+
+Open the menu-bar icon, expand **Recording**, tick what you want, press Record. Sources are your current mic, the whole system output, and every running app; the search box filters them, and the list refreshes while it is open. An app can only be tapped once it has opened an audio stream, so the ones that never have are listed greyed out — apps that play sound, like a browser or Slack, are selectable even while silent. Recordings land in `~/Documents/MicboostRecordings/<timestamp>/` as one stem per source plus a downmix.
+
+Two design choices do the heavy lifting:
+
+- **Stems cannot drift.** Every source joins a single private aggregate device, so one Core Audio callback delivers all of them and each stem is written from the same buffer. There is no alignment step to get wrong, and none to fix afterwards.
+- **A crash cannot cost you the recording.** Capture writes float32 CAF files whose data chunk is left open-ended, so a half-written file is a valid file. `kill -9` mid-call loses at most one 50 ms writer tick, and everything already on disk plays. Encoding happens after the recording stops, and the raw capture is deleted only once every output has been read back and verified.
+
+If a recording is ever interrupted, `micrec recover` finishes it. The menu-bar app runs that at login.
+
+```sh
+micrec sources                        # what can be recorded right now
+micrec start --source mic --source app:org.mozilla.firefox --format flac
+micrec status
+micrec stop
+micrec recover                        # finish anything left half-written
+```
+
+Formats are `flac` (lossless, 24-bit) and `aac` (256 kbit/s). Both encode through Apple's frameworks, so there is nothing else to install.
+
+The recorder runs as its own process. Quitting or crashing the menu-bar app does not touch a recording in progress.
+
 ## Useful commands
 ```sh
 launchctl print gui/$(id -u)/me.pecheny.micboost   # status
@@ -49,6 +74,7 @@ cd ~/micboost
 swiftc -O -framework AudioToolbox -framework CoreAudio -framework Accelerate -framework Foundation micboost.swift -o micboost
 swiftc -O -framework CoreAudio -framework Foundation micboostctl.swift -o micboostctl   # the TUI/CLI
 swiftc -O -framework Cocoa -framework SwiftUI -framework CoreAudio -framework Foundation micboostmenu.swift -o micboostmenu   # the menu-bar app
+swiftc -O -framework AVFoundation -framework CoreAudio -framework AudioToolbox -framework AppKit -framework Foundation micrec.swift -o micrec   # the recorder
 launchctl kickstart -k gui/$(id -u)/me.pecheny.micboost          # restart the bridge
 launchctl kickstart -k gui/$(id -u)/me.pecheny.micboostmenu      # restart the menu-bar app
 ```
