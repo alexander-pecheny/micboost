@@ -20,9 +20,11 @@ Latency added: **1.5 ms** normally, **17.5 ms** with noise suppression on.
    cd micboost && ./install.sh
    ```
 
+The installer puts **micboost.app** in `/Applications`. It starts at login and lives in the menu bar with no Dock icon. **Quit** quits it for good — nothing relaunches it — so start it again from `/Applications` when you want it back. Only one copy ever runs.
+
 ## Settings
 
-Settings come in two flavors: `micboostmenu`, a menu-bar app, and `micboostctl` – terminal TUI/CLI (useful e.g. for agents).
+Settings come in two flavors: micboost.app, the menu-bar app, and `micboostctl` – terminal TUI/CLI (useful e.g. for agents).
 
 ## Noise suppression
 

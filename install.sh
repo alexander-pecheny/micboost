@@ -10,6 +10,8 @@ CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/micboost"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 MENU_PLIST="$HOME/Library/LaunchAgents/$MENU_LABEL.plist"
 BINDIR="${BINDIR:-/opt/homebrew/bin}"
+APP="/Applications/micboost.app"
+APP_ID="me.pecheny.micboost.menu"
 
 echo "==> checking BlackHole (virtual audio device)"
 if ! ls /Library/Audio/Plug-Ins/HAL/ 2>/dev/null | grep -qi blackhole; then
@@ -27,9 +29,35 @@ echo "==> installing config to $CFG_DIR/config (kept if it already exists)"
 mkdir -p "$CFG_DIR"
 [ -f "$CFG_DIR/config" ] || cp config.example "$CFG_DIR/config"
 
-echo "==> linking micboostctl + micboostmenu + micrec into $BINDIR"
+echo "==> installing $APP"
+if [ -d "$APP" ] && [ "$(defaults read "$APP/Contents/Info" CFBundleIdentifier 2>/dev/null)" != "$APP_ID" ]; then
+  echo "!! $APP exists and is not ours — leaving it alone"
+  exit 1
+fi
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS"
+cp micboostmenu micrec "$APP/Contents/MacOS/"
+cat > "$APP/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key><string>micboost</string>
+    <key>CFBundleIdentifier</key><string>$APP_ID</string>
+    <key>CFBundleExecutable</key><string>micboostmenu</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>LSUIElement</key><true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>micboost records the microphone you select.</string>
+</dict>
+</plist>
+EOF
+touch "$APP"
+
+echo "==> linking micboostctl + micrec into $BINDIR"
 ln -sf "$DIR/micboostctl" "$BINDIR/micboostctl"
-ln -sf "$DIR/micboostmenu" "$BINDIR/micboostmenu"
 ln -sf "$DIR/micrec" "$BINDIR/micrec"
 
 echo "==> recordings go to $HOME/Documents/MicboostRecordings"
@@ -54,15 +82,17 @@ cat > "$PLIST" <<EOF
 EOF
 
 echo "==> writing menu-bar login agent $MENU_PLIST"
+# KeepAlive is deliberately off: Quit should quit. It still starts at login, and the app sits in
+# /Applications so it can be started again by hand.
 cat > "$MENU_PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key><string>$MENU_LABEL</string>
-    <key>ProgramArguments</key><array><string>$DIR/micboostmenu</string></array>
+    <key>ProgramArguments</key><array><string>$APP/Contents/MacOS/micboostmenu</string></array>
     <key>RunAtLoad</key><true/>
-    <key>KeepAlive</key><true/>
+    <key>KeepAlive</key><false/>
     <key>StandardOutPath</key><string>/tmp/micboostmenu.log</string>
     <key>StandardErrorPath</key><string>/tmp/micboostmenu.log</string>
 </dict>
@@ -84,4 +114,5 @@ reload "$MENU_LABEL" "$MENU_PLIST"
 
 echo "==> done. Select 'BlackHole 2ch' as your mic in call apps — micboost switches itself on."
 echo "    A 🎙 icon is now in your menu bar: micboost settings and Recording."
+echo "    Quit really quits; start it again from $APP."
 echo "    (Prefer the terminal? micboostctl show / micrec --help)"

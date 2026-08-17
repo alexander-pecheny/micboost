@@ -869,6 +869,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func popoverDidClose(_ n: Notification) { model.rec.popoverOpen = false }
 }
 
+// launchd starts this at login and Finder can start it too, so hold a lock and let the first one win.
+let lockFD = open("/tmp/micboostmenu.lock", O_CREAT | O_RDWR, 0o644)
+if lockFD >= 0, flock(lockFD, LOCK_EX | LOCK_NB) != 0 { exit(0) }
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
