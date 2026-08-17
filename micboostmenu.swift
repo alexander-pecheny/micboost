@@ -374,32 +374,40 @@ final class Model: ObservableObject {
 
     private func d(_ k: String, _ dflt: Double) -> Double { Double(cfg.get(k) ?? "") ?? dflt }
 
+    /// Assigning an unchanged value to an @Published still invalidates every view watching it.
+    /// This runs on each popover open and touched sixteen of them, so it used to rebuild the
+    /// panel sixteen times over before it had drawn once.
+    private func put<T: Equatable>(_ kp: ReferenceWritableKeyPath<Model, T>, _ v: T) {
+        if self[keyPath: kp] != v { self[keyPath: kp] = v }
+    }
+
     func reload() {
         let rawIn  = cfg.get("RODE_NAME") ?? "Wireless MICRO"
         let rawOut = cfg.get("OUT_NAME")  ?? "BlackHole"
         refreshDevices()
-        inDev  = resolve(rawIn,  input: true)  ?? rawIn
-        outDev = resolve(rawOut, input: false) ?? rawOut
-        gain   = d("GAIN_DB", 12)
-        comp   = (cfg.get("COMP") ?? "1") != "0"
-        thresh = d("THRESH_DB", -18)
-        ratio  = d("RATIO", 4)
-        makeup = d("MAKEUP_DB", 6)
-        attack = d("ATTACK_MS", 5)
-        release = d("RELEASE_MS", 150)
-        nr     = (cfg.get("NR") ?? "0") != "0"
-        profileExists = hasProfile()
-        enabled = micboostRunning()
-        systemInput = defaultInputName()
+        put(\.inDev, resolve(rawIn,  input: true)  ?? rawIn)
+        put(\.outDev, resolve(rawOut, input: false) ?? rawOut)
+        put(\.gain, d("GAIN_DB", 12))
+        put(\.comp, (cfg.get("COMP") ?? "1") != "0")
+        put(\.thresh, d("THRESH_DB", -18))
+        put(\.ratio, d("RATIO", 4))
+        put(\.makeup, d("MAKEUP_DB", 6))
+        put(\.attack, d("ATTACK_MS", 5))
+        put(\.release, d("RELEASE_MS", 150))
+        put(\.nr, (cfg.get("NR") ?? "0") != "0")
+        put(\.profileExists, hasProfile())
+        put(\.enabled, micboostRunning())
+        put(\.systemInput, defaultInputName())
         snapshot()
-        statusLine = enabled ? "on" : "off"
+        put(\.statusLine, enabled ? "on" : "off")
     }
 
     func refreshDevices() {
-        inputs  = devices(input: true)
-        outputs = devices(input: false)
-        if !inDev.isEmpty  && !inputs.contains(inDev)   { inputs.insert(inDev, at: 0) }
-        if !outDev.isEmpty && !outputs.contains(outDev) { outputs.insert(outDev, at: 0) }
+        var ins = devices(input: true), outs = devices(input: false)
+        if !inDev.isEmpty  && !ins.contains(inDev)   { ins.insert(inDev, at: 0) }
+        if !outDev.isEmpty && !outs.contains(outDev) { outs.insert(outDev, at: 0) }
+        put(\.inputs, ins)
+        put(\.outputs, outs)
     }
 
     private var staged: [String: String] {
@@ -776,11 +784,10 @@ struct Panel: View {
 }
 
 // ============================ status-item app ============================
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     let model = Model()
     var statusItem: NSStatusItem!
     let popover = NSPopover()
-    var monitor: Any?
     var tick: Timer?
 
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -788,6 +795,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.action = #selector(toggle(_:))
         statusItem.button?.target = self
         popover.behavior = .transient
+        popover.delegate = self
         popover.animates = false
         let hosting = NSHostingController(rootView: Panel(m: model))
         hosting.sizingOptions = [.preferredContentSize]   // keeps the popover in step as sections expand
@@ -829,7 +837,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if b.title != title { b.title = title }
     }
 
-    @objc func toggle(_ sender: Any?) { popover.isShown ? close() : open() }
+    @objc func toggle(_ sender: Any?) {
+        let t0 = ProcessInfo.processInfo.systemUptime
+        popover.isShown ? close() : open()
+        let ms = (ProcessInfo.processInfo.systemUptime - t0) * 1000
+        if ms > 250 { print(String(format: "menu: popover took %.0f ms", ms)) }   // -> /tmp/micboostmenu.log
+    }
 
     func open() {
         guard let b = statusItem.button else { return }
@@ -845,16 +858,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
-        monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            self?.close()
-        }
     }
 
-    func close() {
-        popover.performClose(nil)
-        model.rec.popoverOpen = false
-        if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
-    }
+    func close() { popover.performClose(nil) }
+
+    // A transient popover already closes itself on an outside click, so the system-wide event
+    // monitor this used to install was redundant — and it was removed only from close(), which
+    // AppKit's own dismissal skips. Every leaked monitor then ran on each click anywhere on the
+    // machine, closing the popover and invalidating the view again.
+    func popoverDidClose(_ n: Notification) { model.rec.popoverOpen = false }
 }
 
 let app = NSApplication.shared
