@@ -255,9 +255,15 @@ final class RecModel: ObservableObject {
             m[String(l[..<eq])] = String(l[l.index(after: eq)...])
         }
         if live {
-            let secs = Int(m["seconds"] ?? "0") ?? 0
-            if elapsed != secs { elapsed = secs }
+            // Derived here, from the start instant, so the counter ticks evenly on our own clock
+            // rather than jumping about as two one-second samplers drift past each other.
+            if let e = Double(m["startedEpoch"] ?? ""), e > 0 {
+                let secs = max(0, Int(Date().timeIntervalSince1970 - e))
+                if elapsed != secs { elapsed = secs }
+            }
             if session != m["session"] ?? "" { session = m["session"] ?? "" }
+        } else if elapsed != 0 {
+            elapsed = 0
         }
         let fin = !live && m["state"] == "finalizing"
         if finalizing != fin { finalizing = fin }
@@ -507,6 +513,7 @@ struct SectionBox<Content: View, Accessory: View>: View {
                             .font(.caption2.weight(.bold))
                             .foregroundColor(.secondary)
                             .rotationEffect(.degrees(expanded ? 90 : 0))
+                            .frame(width: 12)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(title).font(.headline)
                             if !subtitle.isEmpty {
@@ -514,10 +521,13 @@ struct SectionBox<Content: View, Accessory: View>: View {
                                     .lineLimit(1).truncationMode(.tail)
                             }
                         }
+                        Spacer(minLength: 8)      // claim the empty space right of the title
                     }
+                    // Without this only the glyphs themselves are hit-tested: the chevron, the
+                    // gaps and the blank strip beside the title all ignored the click.
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                Spacer(minLength: 8)
                 accessory()
             }
             if expanded { content() }

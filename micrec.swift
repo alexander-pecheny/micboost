@@ -355,7 +355,7 @@ final class Recorder {
     private var procID: AudioDeviceIOProcID?
     private let gapFrames = Atomic<Int>(0)
     private let lastCallback = Atomic<UInt64>(0)
-    private var started = Date()
+    private(set) var started = Date()
     private var stalls = 0
     private var paddedSeconds = 0.0
     private var log: FileHandle?
@@ -838,6 +838,15 @@ func cmdStart() {
     try? "\(getpid())\n".write(toFile: PID_PATH, atomically: true, encoding: .utf8)
     print(dir)
 
+    // Publish the start instant, not a running count. A reader that samples this file on its own
+    // clock can then derive an even, monotonic elapsed time instead of beating against ours.
+    func publishStatus() {
+        writeStatus(["state": "recording", "session": dir, "format": format,
+                     "startedEpoch": String(format: "%.3f", rec.started.timeIntervalSince1970),
+                     "stems": rec.stems.map(\.name).joined(separator: "|")])
+    }
+    publishStatus()
+
     for s in [SIGINT, SIGTERM] {
         signal(s, SIG_IGN)
         let src = DispatchSource.makeSignalSource(signal: s, queue: .global())
@@ -853,9 +862,7 @@ func cmdStart() {
         ticks += 1
         if ticks % 20 == 0 {                                   // once a second
             rec.checkStall()
-            writeStatus(["state": "recording", "session": dir, "format": format,
-                         "seconds": String(Int(rec.elapsed)),
-                         "stems": rec.stems.map(\.name).joined(separator: "|")])
+            publishStatus()
             if ticks % 100 == 0, freeBytes(dir) < 300_000_000 {
                 rec.logLine("less than 300 MB free — stopping while the recording is still good")
                 break
@@ -895,7 +902,9 @@ func cmdStatus() {
         .map { kill($0, 0) == 0 } ?? false
     print("state    \(running ? (s["state"] ?? "recording") : (s["state"] ?? "idle"))")
     if let d = s["session"] { print("session  \(d)") }
-    if let n = s["seconds"], running { print("elapsed  \(n) s") }
+    if running, let e = Double(s["startedEpoch"] ?? "") {
+        print("elapsed  \(Int(Date().timeIntervalSince1970 - e)) s")
+    }
     if let n = s["stems"] { print("stems    \(n.replacingOccurrences(of: "|", with: ", "))") }
 }
 
