@@ -495,7 +495,8 @@ struct SliderRow: View {
 /// Collapsed by default, with a control that lives in the header and does not toggle it.
 struct SectionBox<Content: View, Accessory: View>: View {
     let title: String
-    let subtitle: String
+    var subtitle: String = ""
+    var titleFont: Font = .headline
     @Binding var expanded: Bool
     @ViewBuilder let accessory: () -> Accessory
     @ViewBuilder let content: () -> Content
@@ -515,7 +516,7 @@ struct SectionBox<Content: View, Accessory: View>: View {
                             .rotationEffect(.degrees(expanded ? 90 : 0))
                             .frame(width: 12)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(title).font(.headline)
+                            Text(title).font(titleFont)
                             if !subtitle.isEmpty {
                                 Text(subtitle).font(.caption).foregroundColor(.secondary)
                                     .lineLimit(1).truncationMode(.tail)
@@ -523,13 +524,17 @@ struct SectionBox<Content: View, Accessory: View>: View {
                         }
                         Spacer(minLength: 8)      // claim the empty space right of the title
                     }
-                    // Without this only the glyphs themselves are hit-tested: the chevron, the
-                    // gaps and the blank strip beside the title all ignored the click.
+                    // Fill the row and pad into the gaps the enclosing stack would otherwise own,
+                    // then take the whole rectangle: a plain button hit-tests its glyphs alone, so
+                    // the chevron, the spacing and the strip above the title all ignored clicks.
+                    .padding(.vertical, 7)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 accessory()
             }
+            .fixedSize(horizontal: false, vertical: true)
             if expanded { content() }
         }
     }
@@ -566,15 +571,19 @@ struct MicboostSection: View {
                 Toggle(isOn: $m.comp) { Text("Compressor").font(.callout) }.toggleStyle(.switch)
 
                 if m.comp {
-                    DisclosureGroup(isExpanded: $showAdvanced) {
+                    // Not a DisclosureGroup: the stock one toggles on its chevron alone, so the
+                    // word next to it is a decoy you have to avoid clicking.
+                    SectionBox(title: "Advanced", titleFont: .caption, expanded: $showAdvanced) {
+                        EmptyView()
+                    } content: {
                         VStack(alignment: .leading, spacing: 6) {
                             SliderRow(label: "Threshold", value: $m.thresh, range: -60...0, step: 1, unit: "dB")
                             SliderRow(label: "Ratio", value: $m.ratio, range: 1...20, step: 0.5, unit: ":1")
                             SliderRow(label: "Makeup", value: $m.makeup, range: 0...24, step: 1, unit: "dB")
                             SliderRow(label: "Attack", value: $m.attack, range: 1...100, step: 1, unit: "ms")
                             SliderRow(label: "Release", value: $m.release, range: 10...1000, step: 10, unit: "ms")
-                        }.padding(.top, 4)
-                    } label: { Text("Advanced").font(.caption) }
+                        }
+                    }
                 }
 
                 Toggle(isOn: $m.nr) { Text("Noise suppression").font(.callout) }
@@ -715,7 +724,9 @@ struct Panel: View {
     @State private var recordingOpen = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // Tight spacing here on purpose: each section pads itself, so the gap around a header
+        // belongs to that header and toggles it, instead of being dead space owned by this stack.
+        VStack(alignment: .leading, spacing: 4) {
             MicboostSection(m: m, expanded: $micboostOpen)
             Divider()
             RecordingSection(m: m, r: m.rec, expanded: $recordingOpen)
@@ -724,9 +735,10 @@ struct Panel: View {
                 Button("Log…") { m.openLog() }
                 Spacer()
                 Button("Quit") { NSApp.terminate(nil) }
-            }.font(.caption)
+            }.font(.caption).padding(.top, 4)
         }
-        .padding(14)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .frame(width: 340)
         .onChange(of: recordingOpen) { open in if open { m.rec.refreshSources() } }
     }
