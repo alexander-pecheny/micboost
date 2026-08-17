@@ -197,6 +197,7 @@ final class RecModel: ObservableObject {
     @Published var session = ""
     @Published var lastError = ""
     @Published var popoverOpen = false
+    private var proc: Process?
 
     private let cfg: Config
     init(cfg: Config) {
@@ -275,22 +276,57 @@ final class RecModel: ObservableObject {
         FileManager.default.createFile(atPath: REC_LOG, contents: nil)
         if let fh = FileHandle(forWritingAtPath: REC_LOG) { p.standardOutput = fh; p.standardError = fh }
         do { try p.run() } catch { lastError = error.localizedDescription; return }
+        proc = p
         // micrec is not waited on: it outlives this app so quitting the menu never kills a take
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            self?.refreshState()
-            if self?.recording == false {
-                self?.lastError = (try? String(contentsOfFile: REC_LOG, encoding: .utf8))?
-                    .split(separator: "\n").last.map(String.init) ?? "recorder did not start"
+        awaitStart(until: Date().addingTimeInterval(10))
+    }
+
+    /// Building the taps and the aggregate takes a moment, so "no pid file yet" is not a failure —
+    /// only the recorder exiting is. Guessing after a fixed delay turned ordinary log lines into
+    /// alarming warnings.
+    private func awaitStart(until deadline: Date) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self else { return }
+            self.refreshState()
+            if self.recording { return }
+            if let p = self.proc, !p.isRunning {
+                self.lastError = self.logFailure() ?? "the recorder exited straight away"
+            } else if Date() < deadline {
+                self.awaitStart(until: deadline)
+            } else {
+                self.lastError = "the recorder did not start within 10 s"
             }
         }
     }
 
+    private func logFailure() -> String? {
+        guard let t = try? String(contentsOfFile: REC_LOG, encoding: .utf8) else { return nil }
+        let lines = t.split(separator: "\n").map(String.init)
+        if let e = lines.last(where: { $0.hasPrefix("micrec: ") }) { return String(e.dropFirst(8)) }
+        return lines.last
+    }
+
     func stop() {
         finalizing = true
+        let dir = session
         DispatchQueue.global().async { [weak self] in
             run(micrecPath(), ["stop"])
-            DispatchQueue.main.async { self?.finalizing = false; self?.refreshState() }
+            let warning = Self.stallWarning(dir)
+            DispatchQueue.main.async {
+                self?.finalizing = false
+                self?.refreshState()
+                if let w = warning { self?.lastError = w }
+            }
         }
+    }
+
+    /// Audio the hardware never delivered is padded with silence to keep the stems aligned. That
+    /// must never pass unremarked — it is exactly the kind of loss this tool exists to prevent.
+    private static func stallWarning(_ dir: String) -> String? {
+        guard !dir.isEmpty, let d = FileManager.default.contents(atPath: dir + "/session.json"),
+              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+              let secs = j["silencePaddedSeconds"] as? Double, secs > 0 else { return nil }
+        return String(format: "%.1f s of audio was never delivered and is silent in every stem", secs)
     }
 
     func openFolder() {
@@ -729,9 +765,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let symbol = r.recording ? "record.circle.fill" : (model.enabled ? "mic.fill" : "mic.slash")
         if symbol != shownSymbol {
             shownSymbol = symbol
-            b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "micboost")
-            b.image?.isTemplate = !r.recording
-            b.contentTintColor = r.recording ? .systemRed : nil
+            // Template art, never a tint: the menu bar then draws icon and title in the colour the
+            // current appearance calls for. A red tint left both unreadable on a dark bar.
+            let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "micboost")
+            img?.isTemplate = true
+            b.image = img
+            b.contentTintColor = nil
         }
         let title = r.recording ? String(format: " %d:%02d", r.elapsed / 60, r.elapsed % 60) : ""
         if b.title != title { b.title = title }

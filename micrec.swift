@@ -357,6 +357,7 @@ final class Recorder {
     private let lastCallback = Atomic<UInt64>(0)
     private var started = Date()
     private var stalls = 0
+    private var paddedSeconds = 0.0
     private var log: FileHandle?
 
     init(dir: String, format: String, sampleRate: Double) {
@@ -436,7 +437,11 @@ final class Recorder {
             kAudioAggregateDeviceMainSubDeviceKey: main,
             kAudioAggregateDeviceSubDeviceListKey: subDevices,
             kAudioAggregateDeviceTapListKey: tapList,
-            kAudioAggregateDeviceTapAutoStartKey: true,
+            // Must be false. With auto-start on, a tap whose app is merely idle (Spotify paused,
+            // say) stops the aggregate's IO cycle dead — the IOProc never fires and the mic is
+            // lost along with it. Off, the mic keeps flowing and the tap still captures the app
+            // the moment it makes a sound.
+            kAudioAggregateDeviceTapAutoStartKey: false,
         ]
         let s = AudioHardwareCreateAggregateDevice(desc as CFDictionary, &agg)
         guard s == noErr else {
@@ -539,7 +544,9 @@ final class Recorder {
         guard elapsedNs > 2_000_000_000 else { return }
         let secs = Double(elapsedNs) / 1e9
         stalls += 1
-        logLine(String(format: "no audio for %.1f s — device stalled; padding and continuing", secs))
+        paddedSeconds += secs
+        logLine(String(format: "WARNING: no audio for %.1f s — that audio is gone; padding silence "
+                              + "to keep the stems aligned (%.1f s lost so far)", secs, paddedSeconds))
         let pad = Int(secs * sampleRate)
         for w in writers { w.appendSilence(frames: pad) }
         lastCallback.store(mach_absolute_time(), ordering: .releasing)
@@ -571,6 +578,10 @@ final class Recorder {
             },
         ]
         if finished { m["durationSeconds"] = Double(recordedFrames) / rate }
+        if stalls > 0 {                       // audio the hardware never delivered, not a mixing error
+            m["stalls"] = stalls
+            m["silencePaddedSeconds"] = (paddedSeconds * 10).rounded() / 10
+        }
         guard let d = try? JSONSerialization.data(withJSONObject: m, options: [.prettyPrinted, .sortedKeys])
         else { return }
         try? d.write(to: URL(fileURLWithPath: dir + "/session.json"), options: .atomic)
