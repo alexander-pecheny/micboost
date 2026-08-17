@@ -481,7 +481,8 @@ let ROW_HEIGHT: CGFloat = 24
 
 /// macOS draws a switch at 54x24 and ignores controlSize, in SwiftUI and in AppKit alike, so it
 /// towers over .callout text. Scaling the control is the only lever — and only the control, which
-/// is why these rows keep the label out of the Toggle instead of using its own label.
+/// is why these rows keep the label out of the Toggle instead of using its own label. Section
+/// headers are set in a headline and keep the full-size switch.
 private let SWITCH_SCALE: CGFloat = 0.8
 
 extension View {
@@ -579,8 +580,10 @@ struct MicboostSection: View {
         SectionBox(title: "micboost",
                    subtitle: m.enabled ? "\(m.inDev) → \(m.outDev)" : "off · input is \(m.systemInput)",
                    expanded: $expanded) {
+            // Full size here on purpose: it answers to a headline, not to a callout row.
             Toggle("", isOn: Binding(get: { m.enabled }, set: { m.setEnabled($0) }))
-                .compactSwitch()
+                .toggleStyle(.switch)
+                .labelsHidden()
         } content: {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
