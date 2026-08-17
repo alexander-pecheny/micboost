@@ -479,6 +479,32 @@ final class Model: ObservableObject {
 /// switch, which left the baselines unevenly spaced and read as inconsistent type.
 let ROW_HEIGHT: CGFloat = 24
 
+/// macOS draws a switch at 54x24 and ignores controlSize, in SwiftUI and in AppKit alike, so it
+/// towers over .callout text. Scaling the control is the only lever — and only the control, which
+/// is why these rows keep the label out of the Toggle instead of using its own label.
+private let SWITCH_SCALE: CGFloat = 0.8
+
+extension View {
+    func compactSwitch() -> some View {
+        toggleStyle(.switch).labelsHidden()
+            .scaleEffect(SWITCH_SCALE)
+            .frame(width: 54 * SWITCH_SCALE, height: 24 * SWITCH_SCALE)
+    }
+}
+
+struct SwitchRow: View {
+    let label: String
+    @Binding var isOn: Bool
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(label).font(.callout)
+            Toggle("", isOn: $isOn).compactSwitch()
+            Spacer(minLength: 0)
+        }
+        .frame(height: ROW_HEIGHT)
+    }
+}
+
 struct SliderRow: View {
     let label: String
     @Binding var value: Double
@@ -554,8 +580,7 @@ struct MicboostSection: View {
                    subtitle: m.enabled ? "\(m.inDev) → \(m.outDev)" : "off · input is \(m.systemInput)",
                    expanded: $expanded) {
             Toggle("", isOn: Binding(get: { m.enabled }, set: { m.setEnabled($0) }))
-                .toggleStyle(.switch)
-                .labelsHidden()
+                .compactSwitch()
         } content: {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
@@ -572,8 +597,7 @@ struct MicboostSection: View {
                 }.font(.callout).frame(height: ROW_HEIGHT)
 
                 SliderRow(label: "Gain", value: $m.gain, range: -6...30, step: 1, unit: "dB")
-                Toggle(isOn: $m.comp) { Text("Compressor").font(.callout) }
-                    .toggleStyle(.switch).frame(height: ROW_HEIGHT)
+                SwitchRow(label: "Compressor", isOn: $m.comp)
 
                 if m.comp {
                     // Not a DisclosureGroup: the stock one toggles on its chevron alone, so the
@@ -591,9 +615,7 @@ struct MicboostSection: View {
                     }
                 }
 
-                Toggle(isOn: $m.nr) { Text("Noise suppression").font(.callout) }
-                    .toggleStyle(.switch)
-                    .frame(height: ROW_HEIGHT)
+                SwitchRow(label: "Noise suppression", isOn: $m.nr)
                     .disabled(!m.profileExists)
 
                 if m.capturing {
