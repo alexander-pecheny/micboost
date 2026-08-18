@@ -3,8 +3,9 @@
 // Every source lives in one private aggregate device, so a single IOProc delivers all of them
 // in the same callback and the stems can never drift apart. Capture writes float32 CAF files
 // whose data chunk is left open-ended, which makes a half-written recording a valid file:
-// kill -9, a panic or a flat battery costs at most one 50 ms writer tick. Encoding to
-// FLAC/ALAC/AAC and the downmix happen afterwards, never on the audio thread.
+// kill -9, a panic or a flat battery costs at most one 50 ms writer tick. A low-priority thread
+// encodes to FLAC/AAC and mixes as the raw files grow, so a take is done moments after it stops;
+// nothing but the ring buffers ever runs on the audio thread.
 //
 // Build:  swiftc -O -framework AVFoundation -framework CoreAudio -framework AudioToolbox \
 //                 -framework AppKit -framework Foundation micrec.swift -o micrec
@@ -341,6 +342,7 @@ func readStatus() -> [String: String] {
 
 // ============================ recorder ============================
 let stopFlag = Atomic<Int>(0)
+let captureDone = Atomic<Bool>(false)
 
 final class Recorder {
     let dir: String
@@ -593,7 +595,6 @@ struct RawStem {
     var name: String
     var path: String
     var channels: Int
-    var frames: Int
 }
 
 func rawStems(in dir: String) -> (rate: Double, format: String, stems: [RawStem])? {
@@ -602,14 +603,10 @@ func rawStems(in dir: String) -> (rate: Double, format: String, stems: [RawStem]
           let rate = j["sampleRate"] as? Double,
           let arr = j["stems"] as? [[String: Any]] else { return nil }
     let format = (j["format"] as? String) ?? "flac"
-    var out = [RawStem]()
-    for s in arr {
+    let out = arr.compactMap { s -> RawStem? in
         guard let name = s["name"] as? String, let raw = s["raw"] as? String,
-              let ch = s["channels"] as? Int else { continue }
-        let path = dir + "/" + raw
-        let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int ?? 0
-        out.append(RawStem(name: name, path: path, channels: ch,
-                           frames: max(0, (size - CAF_HEADER_BYTES) / (4 * ch))))
+              let ch = s["channels"] as? Int else { return nil }
+        return RawStem(name: name, path: dir + "/" + raw, channels: ch)
     }
     return out.isEmpty ? nil : (rate, format, out)
 }
@@ -624,134 +621,131 @@ func encoderSettings(_ format: String, rate: Double, channels: Int) -> ([String:
     }
 }
 
-/// Streams a raw CAF through a block, `chunk` frames at a time.
-func readRaw(_ s: RawStem, chunk: Int, _ body: (UnsafePointer<Float>, Int) -> Void) throws {
-    let fh = try FileHandle(forReadingFrom: URL(fileURLWithPath: s.path))
-    defer { try? fh.close() }
-    try fh.seek(toOffset: UInt64(CAF_HEADER_BYTES))
-    let bytes = chunk * 4 * s.channels
-    while true {
-        guard let d = try fh.read(upToCount: bytes), !d.isEmpty else { return }
-        let n = d.count / (4 * s.channels)
-        guard n > 0 else { return }
-        d.withUnsafeBytes { body($0.bindMemory(to: Float.self).baseAddress!, n) }
-    }
+func micrecError(_ code: Int, _ msg: String) -> NSError {
+    NSError(domain: "micrec", code: code, userInfo: [NSLocalizedDescriptionKey: msg])
 }
 
-func encode(_ s: RawStem, to path: String, rate: Double, format: String) throws {
-    guard let (settings, _) = encoderSettings(format, rate: rate, channels: s.channels) else {
-        throw NSError(domain: "micrec", code: 10,
-                      userInfo: [NSLocalizedDescriptionKey: "unknown format \(format)"])
+/// The mix is encoded while the take is still running, so it cannot be gain-normalised — that
+/// needs the whole take first. Peaks above the knee bend smoothly towards -0.5 dBFS instead; the
+/// lossless stems remain for anyone who wants an exact re-mix.
+let CLIP_KNEE: Float = 0.75, CLIP_CEILING: Float = 0.9441
+@inline(__always) func softClip(_ x: Float) -> Float {
+    let a = abs(x)
+    guard a > CLIP_KNEE else { return x }
+    let y = CLIP_KNEE + (CLIP_CEILING - CLIP_KNEE) * tanhf((a - CLIP_KNEE) / (CLIP_CEILING - CLIP_KNEE))
+    return x < 0 ? -y : y
+}
+
+func preadAll(_ fd: Int32, _ p: UnsafeMutableRawPointer, _ n: Int, at offset: Int) -> Bool {
+    var off = 0
+    while off < n {
+        let r = pread(fd, p + off, n - off, off_t(offset + off))
+        if r <= 0 { if r < 0 && errno == EINTR { continue }; return false }
+        off += r
     }
+    return true
+}
+
+func openForEncoding(_ path: String, _ settings: [String: Any], chunk: Int) throws -> (AVAudioFile, AVAudioPCMBuffer) {
     let url = URL(fileURLWithPath: path)
     try? FileManager.default.removeItem(at: url)
-    let file = try AVAudioFile(forWriting: url, settings: settings,
-                               commonFormat: .pcmFormatFloat32, interleaved: false)
-    let fmt = file.processingFormat
-    let chunk = 32768
-    guard let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(chunk)) else { return }
-    var err: Error?
-    try readRaw(s, chunk: chunk) { p, n in
-        guard err == nil, let dst = buf.floatChannelData else { return }
-        for c in 0..<s.channels { for i in 0..<n { dst[c][i] = p[i * s.channels + c] } }
-        buf.frameLength = AVAudioFrameCount(n)
-        do { try file.write(from: buf) } catch { err = error }
+    let f = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: true)
+    guard let b = AVAudioPCMBuffer(pcmFormat: f.processingFormat, frameCapacity: AVAudioFrameCount(chunk)) else {
+        throw micrecError(11, "cannot allocate a buffer for \(path)")
     }
-    if let e = err { throw e }
+    return (f, b)
 }
 
-/// Sums every stem to stereo. Two passes: find the peak, then write with exactly the gain needed
-/// to sit at -0.5 dBFS, so the mix never clips and is never needlessly quiet.
-func downmix(_ stems: [RawStem], to path: String, rate: Double, format: String) throws {
-    let frames = stems.map(\.frames).max() ?? 0
-    guard frames > 0 else { return }
-    let chunk = 32768
-    var acc = [Float](repeating: 0, count: chunk * 2)
-
-    func sweep(_ body: (UnsafePointer<Float>, Int) -> Void) throws {
-        var handles = [FileHandle]()
-        for s in stems {
-            let fh = try FileHandle(forReadingFrom: URL(fileURLWithPath: s.path))
-            try fh.seek(toOffset: UInt64(CAF_HEADER_BYTES))
-            handles.append(fh)
-        }
-        defer { for h in handles { try? h.close() } }
-        var done = 0
-        while done < frames {
-            let want = min(chunk, frames - done)
-            for i in 0..<(want * 2) { acc[i] = 0 }
-            for (i, s) in stems.enumerated() {
-                guard let d = try handles[i].read(upToCount: want * 4 * s.channels), !d.isEmpty else { continue }
-                let n = min(want, d.count / (4 * s.channels))
-                d.withUnsafeBytes { rb in
-                    let p = rb.bindMemory(to: Float.self).baseAddress!
-                    for f in 0..<n {
-                        if s.channels == 1 {
-                            acc[f * 2] += p[f]; acc[f * 2 + 1] += p[f]
-                        } else {
-                            acc[f * 2] += p[f * s.channels]; acc[f * 2 + 1] += p[f * s.channels + 1]
-                        }
-                    }
-                }
-            }
-            acc.withUnsafeBufferPointer { body($0.baseAddress!, want) }
-            done += want
-        }
+/// One pass over the raw stems: every stem is encoded and, given more than one, summed to a
+/// soft-clipped stereo mix. While `capturing` is true the pass follows the files as they grow,
+/// so on the live path it runs alongside the recording and is done moments after it stops. Stems
+/// advance in lockstep, so a take that died mid-tick ends where its shortest stem does.
+func encodeSession(dir: String, rate: Double, format: String, stems: [RawStem],
+                   capturing: () -> Bool) throws -> (frames: Int, outputs: [String]) {
+    guard let (mixSettings, ext) = encoderSettings(format, rate: rate, channels: 2) else {
+        throw micrecError(10, "unknown format \(format)")
     }
+    let chunk = 32768
+    try FileManager.default.createDirectory(atPath: dir + "/stems", withIntermediateDirectories: true)
+    var fds = [Int32](), files = [AVAudioFile](), bufs = [AVAudioPCMBuffer](), outputs = [String]()
+    defer { for fd in fds { close(fd) } }
+    for s in stems {
+        let fd = open(s.path, O_RDONLY)
+        guard fd >= 0 else { throw micrecError(12, "cannot open \(s.path)") }
+        fds.append(fd)
+        let out = dir + "/stems/" + sanitize(s.name) + "." + ext
+        let (f, b) = try openForEncoding(out, encoderSettings(format, rate: rate, channels: s.channels)!.0, chunk: chunk)
+        files.append(f); bufs.append(b); outputs.append(out)
+    }
+    if stems.count > 1 {                                    // the mix rides along as one more output
+        let out = dir + "/mix." + ext
+        let (f, b) = try openForEncoding(out, mixSettings, chunk: chunk)
+        files.append(f); bufs.append(b); outputs.append(out)
+    }
+    let mix = files.count > stems.count ? bufs[stems.count].floatChannelData![0] : nil
 
+    var done = 0
     var peak: Float = 0
-    try sweep { p, n in for i in 0..<(n * 2) { peak = max(peak, abs(p[i])) } }
-    let ceiling: Float = 0.9441                      // -0.5 dBFS
-    let gain = peak > ceiling ? ceiling / peak : 1
+    while true {
+        var avail = Int.max
+        for (i, s) in stems.enumerated() {
+            var st = stat()
+            fstat(fds[i], &st)
+            avail = min(avail, (Int(st.st_size) - CAF_HEADER_BYTES) / (4 * s.channels))
+        }
+        let want = min(chunk, avail - done)
+        if want < chunk && capturing() { Thread.sleep(forTimeInterval: 0.2); continue }
+        if want <= 0 { break }
 
-    guard let (settings, _) = encoderSettings(format, rate: rate, channels: 2) else { return }
-    let url = URL(fileURLWithPath: path)
-    try? FileManager.default.removeItem(at: url)
-    let file = try AVAudioFile(forWriting: url, settings: settings,
-                               commonFormat: .pcmFormatFloat32, interleaved: false)
-    guard let buf = AVAudioPCMBuffer(pcmFormat: file.processingFormat,
-                                     frameCapacity: AVAudioFrameCount(chunk)) else { return }
-    var err: Error?
-    try sweep { p, n in
-        guard err == nil, let dst = buf.floatChannelData else { return }
-        for i in 0..<n { dst[0][i] = p[i * 2] * gain; dst[1][i] = p[i * 2 + 1] * gain }
-        buf.frameLength = AVAudioFrameCount(n)
-        do { try file.write(from: buf) } catch { err = error }
+        if let mix { for i in 0..<(want * 2) { mix[i] = 0 } }
+        for (i, s) in stems.enumerated() {
+            let p = bufs[i].floatChannelData![0]
+            guard preadAll(fds[i], p, want * 4 * s.channels, at: CAF_HEADER_BYTES + done * 4 * s.channels) else {
+                throw micrecError(13, "read failed on \(s.path) — \(String(cString: strerror(errno)))")
+            }
+            bufs[i].frameLength = AVAudioFrameCount(want)
+            try files[i].write(from: bufs[i])
+            guard let mix else { continue }
+            let right = s.channels > 1 ? 1 : 0
+            for f in 0..<want {
+                mix[f * 2] += p[f * s.channels]
+                mix[f * 2 + 1] += p[f * s.channels + right]
+            }
+        }
+        if let mix {
+            for i in 0..<(want * 2) { peak = max(peak, abs(mix[i])); mix[i] = softClip(mix[i]) }
+            bufs[stems.count].frameLength = AVAudioFrameCount(want)
+            try files[stems.count].write(from: bufs[stems.count])
+        }
+        done += want
     }
-    if let e = err { throw e }
-    if gain < 1 { note(String(format: "mix: peak was %.1f dBFS, pulled down %.1f dB",
-                              20 * log10(peak), 20 * log10(gain))) }
+    if peak > CLIP_KNEE {
+        note(String(format: "mix: peak %.1f dBFS, soft-clipped above %.1f dBFS",
+                    20 * log10(peak), 20 * log10(CLIP_KNEE)))
+    }
+    return (done, outputs)
 }
 
-/// Encode stems + mix, verify every output before the raw capture is removed.
+/// Encode a session — following the capture live while `capturing` says so — and verify every
+/// output before the raw capture is removed.
 @discardableResult
-func finalize(dir: String, keepRaw: Bool) -> Bool {
+func finalize(dir: String, keepRaw: Bool, capturing: () -> Bool = { false }) -> Bool {
     guard let (rate, format, stems) = rawStems(in: dir) else {
         note("\(dir): no session.json — skipped"); return false
     }
-    guard let (_, ext) = encoderSettings(format, rate: rate, channels: 2) else {
-        note("\(dir): unknown format \(format)"); return false
-    }
-    writeStatus(["state": "finalizing", "session": dir])
-    try? FileManager.default.createDirectory(atPath: dir + "/stems", withIntermediateDirectories: true)
+    if !capturing() { writeStatus(["state": "finalizing", "session": dir]) }
 
-    var ok = true
-    for s in stems where s.frames > 0 {
-        let out = dir + "/stems/" + sanitize(s.name) + "." + ext
-        do {
-            try encode(s, to: out, rate: rate, format: format)
-            let written = (try? AVAudioFile(forReading: URL(fileURLWithPath: out)).length) ?? 0
-            // lossy codecs pad to a packet boundary; a short file means a real failure
-            if Double(written) < Double(s.frames) * 0.999 {
-                note("\(s.name): encoded \(written) of \(s.frames) frames — keeping raw"); ok = false
-            } else {
-                note("\(s.name): \(written) frames -> \(out)")
-            }
-        } catch { note("\(s.name): encode failed — \(error.localizedDescription)"); ok = false }
-    }
-    if stems.count > 1 {
-        do { try downmix(stems, to: dir + "/mix." + ext, rate: rate, format: format) }
-        catch { note("mix failed — \(error.localizedDescription)"); ok = false }
+    var ok = true, frames = 0, outputs = [String]()
+    do { (frames, outputs) = try encodeSession(dir: dir, rate: rate, format: format, stems: stems, capturing: capturing) }
+    catch { note("encode failed — \(error.localizedDescription)"); ok = false }
+    for out in outputs {
+        let written = (try? AVAudioFile(forReading: URL(fileURLWithPath: out)).length) ?? 0
+        // lossy codecs pad to a packet boundary; a short file means a real failure
+        if Double(written) < Double(frames) * 0.999 {
+            note("\(out): encoded \(written) of \(frames) frames — keeping raw"); ok = false
+        } else {
+            note("\(written) frames -> \(out)")
+        }
     }
 
     if ok && !keepRaw {
@@ -847,6 +841,14 @@ func cmdStart() {
     }
     publishStatus()
 
+    let encoderDone = DispatchSemaphore(value: 0)
+    let encoder = Thread {
+        finalize(dir: dir, keepRaw: hasFlag("--keep-raw")) { !captureDone.load(ordering: .acquiring) }
+        encoderDone.signal()
+    }
+    encoder.qualityOfService = .utility
+    encoder.start()
+
     for s in [SIGINT, SIGTERM] {
         signal(s, SIG_IGN)
         let src = DispatchSource.makeSignalSource(signal: s, queue: .global())
@@ -870,8 +872,10 @@ func cmdStart() {
         }
     }
     rec.stop()
+    writeStatus(["state": "finalizing", "session": dir])
+    captureDone.store(true, ordering: .releasing)
+    encoderDone.wait()
     try? FileManager.default.removeItem(atPath: PID_PATH)
-    finalize(dir: dir, keepRaw: hasFlag("--keep-raw"))
     print("done: \(dir)")
 }
 
@@ -888,7 +892,7 @@ func cmdStop() {
         fail("not recording")
     }
     kill(pid, SIGTERM)
-    for _ in 0..<600 {                                          // finalising can take a while
+    for _ in 0..<600 {
         Thread.sleep(forTimeInterval: 0.1)
         if kill(pid, 0) != 0 { print("stopped"); return }
     }

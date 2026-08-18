@@ -45,7 +45,9 @@ Open the menu-bar icon, expand **Recording**, tick what you want, press Record. 
 Two design choices do the heavy lifting:
 
 - **Stems cannot drift.** Every source joins a single private aggregate device, so one Core Audio callback delivers all of them and each stem is written from the same buffer. There is no alignment step to get wrong, and none to fix afterwards.
-- **A crash cannot cost you the recording.** Capture writes float32 CAF files whose data chunk is left open-ended, so a half-written file is a valid file. `kill -9` mid-call loses at most one 50 ms writer tick, and everything already on disk plays. Encoding happens after the recording stops, and the raw capture is deleted only once every output has been read back and verified.
+- **A crash cannot cost you the recording.** Capture writes float32 CAF files whose data chunk is left open-ended, so a half-written file is a valid file. `kill -9` mid-call loses at most one 50 ms writer tick, and everything already on disk plays. A low-priority thread encodes the stems and the mix as the raw files grow, so a take is ready moments after it stops; the raw capture is deleted only once every output has been read back and verified.
+
+The mix is summed at unity gain and soft-clipped above -2.5 dBFS, because normalising it would mean waiting for the whole take. When a take matters enough for an exact mix, the lossless stems are there to re-mix from.
 
 If a recording is ever interrupted, `micrec recover` finishes it. The menu-bar app runs that at login.
 
