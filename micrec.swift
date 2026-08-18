@@ -616,7 +616,9 @@ func encoderSettings(_ format: String, rate: Double, channels: Int) -> ([String:
     case "flac": return ([AVFormatIDKey: kAudioFormatFLAC, AVSampleRateKey: rate,
                           AVNumberOfChannelsKey: channels, AVLinearPCMBitDepthKey: 24], "flac")
     case "aac":  return ([AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: rate,
-                          AVNumberOfChannelsKey: channels, AVEncoderBitRateKey: 256_000], "m4a")
+                          AVNumberOfChannelsKey: channels,
+                          AVEncoderBitRateStrategyKey: AVAudioBitRateStrategy_Variable,
+                          AVEncoderAudioQualityForVBRKey: AVAudioQuality.medium.rawValue], "m4a")
     default: return nil
     }
 }

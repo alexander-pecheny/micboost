@@ -732,7 +732,7 @@ struct RecordingSection: View {
                     Picker("", selection: Binding(get: { r.format },
                                                   set: { r.format = $0; r.persist() })) {
                         Text("Lossless — FLAC").tag("flac")
-                        Text("Lossy — AAC 256k").tag("aac")
+                        Text("Lossy — AAC (VBR)").tag("aac")
                     }.labelsHidden().disabled(r.recording)
                 }.font(.callout).frame(height: ROW_HEIGHT)
 

@@ -59,7 +59,7 @@ micrec stop
 micrec recover                        # finish anything left half-written
 ```
 
-Formats are `flac` (lossless, 24-bit) and `aac` (256 kbit/s). Both encode through Apple's frameworks, so there is nothing else to install.
+Formats are `flac` (lossless, 24-bit) and `aac` (variable bit rate, tuned for speech). Both encode through Apple's frameworks, so there is nothing else to install.
 
 The recorder runs as its own process. Quitting or crashing the menu-bar app does not touch a recording in progress.
 
