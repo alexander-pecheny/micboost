@@ -818,23 +818,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         render()
     }
 
-    var shownSymbol = ""
+    var shown = ""
 
     func render() {
         guard let b = statusItem.button else { return }
         let r = model.rec
         let symbol = r.recording ? "record.circle.fill" : (model.enabled ? "mic.fill" : "mic.slash")
-        if symbol != shownSymbol {
-            shownSymbol = symbol
-            // Template art, never a tint: the menu bar then draws icon and title in the colour the
-            // current appearance calls for. A red tint left both unreadable on a dark bar.
-            let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "micboost")
-            img?.isTemplate = true
-            b.image = img
-            b.contentTintColor = nil
+        let time = r.recording ? String(format: "%d:%02d", r.elapsed / 60, r.elapsed % 60) : ""
+        let key = symbol + time
+        if key == shown { return }
+        shown = key
+        b.image = statusImage(symbol: symbol, time: time)
+    }
+
+    // One template image for icon and time: AppKit draws a button title on its text baseline,
+    // which sat the digits below the icon; here the digits' cap height is centred on the icon.
+    // Template art (never a tint) lets the menu bar pick the colour for the current appearance.
+    func statusImage(symbol: String, time: String) -> NSImage {
+        let icon = NSImage(systemSymbolName: symbol, accessibilityDescription: "micboost")!
+        let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize(for: .regular), weight: .regular)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
+        let text = time as NSString
+        let textW = time.isEmpty ? 0 : text.size(withAttributes: attrs).width
+        let gap: CGFloat = time.isEmpty ? 0 : 3
+        let h = max(icon.size.height, font.ascender - font.descender)
+        let img = NSImage(size: NSSize(width: icon.size.width + gap + textW, height: h), flipped: false) { _ in
+            icon.draw(in: NSRect(x: 0, y: (h - icon.size.height) / 2, width: icon.size.width, height: icon.size.height))
+            text.draw(at: NSPoint(x: icon.size.width + gap, y: h / 2 - font.capHeight / 2 + font.descender), withAttributes: attrs)
+            return true
         }
-        let title = r.recording ? String(format: " %d:%02d", r.elapsed / 60, r.elapsed % 60) : ""
-        if b.title != title { b.title = title }
+        img.isTemplate = true
+        return img
     }
 
     @objc func toggle(_ sender: Any?) {
