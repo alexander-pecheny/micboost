@@ -658,8 +658,8 @@ func openForEncoding(_ path: String, _ settings: [String: Any], chunk: Int) thro
     return (f, b)
 }
 
-/// One pass over the raw stems: every stem is encoded and, given more than one, summed to a
-/// soft-clipped stereo mix. While `capturing` is true the pass follows the files as they grow,
+/// One pass over the raw stems: every stem is encoded to FLAC and, given more than one or a
+/// lossy format, summed to a soft-clipped stereo mix in that format. While `capturing` is true the pass follows the files as they grow,
 /// so on the live path it runs alongside the recording and is done moments after it stops. Stems
 /// advance in lockstep, so a take that died mid-tick ends where its shortest stem does.
 func encodeSession(dir: String, rate: Double, format: String, stems: [RawStem],
@@ -671,15 +671,16 @@ func encodeSession(dir: String, rate: Double, format: String, stems: [RawStem],
     try FileManager.default.createDirectory(atPath: dir + "/stems", withIntermediateDirectories: true)
     var fds = [Int32](), files = [AVAudioFile](), bufs = [AVAudioPCMBuffer](), outputs = [String]()
     defer { for fd in fds { close(fd) } }
-    for s in stems {
+    for s in stems {                                        // stems stay lossless whatever the mix is
         let fd = open(s.path, O_RDONLY)
         guard fd >= 0 else { throw micrecError(12, "cannot open \(s.path)") }
         fds.append(fd)
+        let (settings, ext) = encoderSettings("flac", rate: rate, channels: s.channels)!
         let out = dir + "/stems/" + sanitize(s.name) + "." + ext
-        let (f, b) = try openForEncoding(out, encoderSettings(format, rate: rate, channels: s.channels)!.0, chunk: chunk)
+        let (f, b) = try openForEncoding(out, settings, chunk: chunk)
         files.append(f); bufs.append(b); outputs.append(out)
     }
-    if stems.count > 1 {                                    // the mix rides along as one more output
+    if stems.count > 1 || format != "flac" {                // the mix rides along as one more output
         let out = dir + "/mix." + ext
         let (f, b) = try openForEncoding(out, mixSettings, chunk: chunk)
         files.append(f); bufs.append(b); outputs.append(out)
