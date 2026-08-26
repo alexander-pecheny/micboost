@@ -831,20 +831,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         b.image = statusImage(symbol: symbol, time: time)
     }
 
-    // One template image for icon and time: AppKit draws a button title on its text baseline,
-    // which sat the digits below the icon; here the digits' cap height is centred on the icon.
-    // Template art (never a tint) lets the menu bar pick the colour for the current appearance.
+    // A capsule with a dot and the digits inside, drawn as one template image: AppKit puts a
+    // button title on its text baseline, which sat the digits below the icon. Template art (never
+    // a tint) lets the menu bar pick the colour for the current appearance.
     func statusImage(symbol: String, time: String) -> NSImage {
-        let icon = NSImage(systemSymbolName: symbol, accessibilityDescription: "micboost")!
-        let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize(for: .regular), weight: .regular)
+        if time.isEmpty {
+            let icon = NSImage(systemSymbolName: symbol, accessibilityDescription: "micboost")!
+            icon.isTemplate = true
+            return icon
+        }
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .semibold)
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
         let text = time as NSString
-        let textW = time.isEmpty ? 0 : text.size(withAttributes: attrs).width
-        let gap: CGFloat = time.isEmpty ? 0 : 3
-        let h = max(icon.size.height, font.ascender - font.descender)
-        let img = NSImage(size: NSSize(width: icon.size.width + gap + textW, height: h), flipped: false) { _ in
-            icon.draw(in: NSRect(x: 0, y: (h - icon.size.height) / 2, width: icon.size.width, height: icon.size.height))
-            text.draw(at: NSPoint(x: icon.size.width + gap, y: h / 2 - font.capHeight / 2 + font.descender), withAttributes: attrs)
+        let dot: CGFloat = 5, gap: CGFloat = 3, padX: CGFloat = 4, h: CGFloat = 13
+        let w = padX * 2 + dot + gap + ceil(text.size(withAttributes: attrs).width)
+        let img = NSImage(size: NSSize(width: w, height: h), flipped: false) { r in
+            NSColor.black.setStroke()
+            NSColor.black.setFill()
+            let ring = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: h / 2, yRadius: h / 2)
+            ring.lineWidth = 1
+            ring.stroke()
+            NSBezierPath(ovalIn: NSRect(x: padX, y: (h - dot) / 2, width: dot, height: dot)).fill()
+            text.draw(at: NSPoint(x: padX + dot + gap, y: h / 2 - font.capHeight / 2 + font.descender),
+                      withAttributes: attrs)
             return true
         }
         img.isTemplate = true
