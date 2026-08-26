@@ -451,7 +451,16 @@ final class Recorder {
                           userInfo: [NSLocalizedDescriptionKey: "aggregate device failed (\(s))"])
         }
 
-        setSampleRate(agg, sampleRate)                  // pin it; otherwise the clock device decides
+        // Pin the rate; otherwise the clock device decides. A mic that cannot do our rate — AirPods
+        // run theirs at 24 kHz — makes CoreAudio clamp the aggregate to what the clock can do while
+        // the taps keep declaring their own rate. Pinning again to the rate it settled on makes them
+        // resample down to it, so every stream really does deliver the same frames per second.
+        setSampleRate(agg, sampleRate)
+        let settled = get(agg, addr(kAudioDevicePropertyNominalSampleRate), sampleRate)
+        if settled != sampleRate {
+            logLine("clock runs at \(Int(settled)) Hz, not \(Int(sampleRate)) — recording at \(Int(settled)) Hz")
+            setSampleRate(agg, settled)
+        }
         let formats = inputStreamFormats(agg)
         guard formats.count == expected.count else {
             throw NSError(domain: "micrec", code: 4, userInfo: [NSLocalizedDescriptionKey:
