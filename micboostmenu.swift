@@ -173,6 +173,16 @@ func defaultInputName() -> String {
     return deviceName(id)
 }
 
+@discardableResult
+func setDefaultInput(_ needle: String) -> Bool {
+    let n = needle.lowercased()
+    guard !n.isEmpty,
+          var id = deviceIDs().first(where: { hasStreams($0, input: true) && deviceName($0).lowercased().contains(n) })
+    else { return false }
+    var a = caAddr(kAudioHardwarePropertyDefaultInputDevice)
+    return AudioObjectSetPropertyData(SYS, &a, 0, nil, UInt32(MemoryLayout<AudioDeviceID>.size), &id) == noErr
+}
+
 func fmtNum(_ d: Double) -> String {
     d == d.rounded() ? String(Int(d)) : String(format: "%g", d)
 }
@@ -357,6 +367,7 @@ final class Model: ObservableObject {
     @Published var attack = 5.0
     @Published var release = 150.0
     @Published var nr     = false
+    @Published var autoSwitch = false
 
     @Published var inputs:  [String] = []
     @Published var outputs: [String] = []
@@ -369,6 +380,8 @@ final class Model: ObservableObject {
     @Published var captureLeft = 0.0
 
     private var base: [String: String] = [:]
+    private var micPresent = false
+    private let PREV_INPUT = "inputBeforeMic"
 
     init() { reload() }
 
@@ -395,6 +408,7 @@ final class Model: ObservableObject {
         put(\.attack, d("ATTACK_MS", 5))
         put(\.release, d("RELEASE_MS", 150))
         put(\.nr, (cfg.get("NR") ?? "0") != "0")
+        put(\.autoSwitch, (cfg.get("AUTO_SWITCH") ?? "0") != "0")
         put(\.profileExists, hasProfile())
         put(\.enabled, micboostRunning())
         put(\.systemInput, defaultInputName())
@@ -430,6 +444,34 @@ final class Model: ObservableObject {
         setMicboost(on)
         enabled = on
         statusLine = on ? "on" : "off"
+    }
+
+    func setAutoSwitch(_ on: Bool) {
+        autoSwitch = on
+        cfg.set("AUTO_SWITCH", on ? "1" : "0")
+        cfg.save()
+    }
+
+    func primeMicPresence() { micPresent = resolve(cfg.get("RODE_NAME") ?? "Wireless MICRO", input: true) != nil }
+
+    /// Plugging the mic in should route the call through micboost without a trip to Sound
+    /// settings, and unplugging it should hand the input back to whatever had it before.
+    func devicesChanged() {
+        refreshDevices()
+        let out = cfg.get("OUT_NAME") ?? "BlackHole"
+        let present = resolve(cfg.get("RODE_NAME") ?? "Wireless MICRO", input: true) != nil
+        defer { micPresent = present }
+        guard autoSwitch, present != micPresent else { return }
+        let onMicboost = defaultInputName().lowercased().contains(out.lowercased())
+        if present {
+            if !onMicboost { UserDefaults.standard.set(defaultInputName(), forKey: PREV_INPUT) }
+            print("menu: mic connected — input \(defaultInputName()) -> \(out)")
+            setDefaultInput(out)
+        } else if let prev = UserDefaults.standard.string(forKey: PREV_INPUT), !prev.isEmpty {
+            print("menu: mic gone — input back to \(prev)")
+            if onMicboost { setDefaultInput(prev) }   // a manual change since the mic arrived wins
+            UserDefaults.standard.removeObject(forKey: PREV_INPUT)
+        }
     }
 
     /// Selecting micboost's own output device as the system input means "route me through
@@ -608,6 +650,9 @@ struct MicboostSection: View {
                         ForEach(m.outputs, id: \.self) { Text($0).tag($0) }
                     }.labelsHidden()
                 }.font(.callout).frame(height: ROW_HEIGHT)
+
+                SwitchRow(label: "Switch input when the mic connects",
+                          isOn: Binding(get: { m.autoSwitch }, set: { m.setAutoSwitch($0) }))
 
                 SliderRow(label: "Gain", value: $m.gain, range: -6...30, step: 1, unit: "dB")
                 SwitchRow(label: "Compressor", isOn: $m.comp)
@@ -808,6 +853,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             self?.model.systemInputChanged()
         }
         model.systemInputChanged()
+
+        model.primeMicPresence()
+        var dev = caAddr(kAudioHardwarePropertyDevices)
+        AudioObjectAddPropertyListenerBlock(SYS, &dev, DispatchQueue.main) { [weak self] _, _ in
+            self?.model.devicesChanged()
+        }
 
         // finish anything a crash or a reboot left half-written
         DispatchQueue.global().async { run(micrecPath(), ["recover"]) }

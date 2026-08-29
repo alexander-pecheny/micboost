@@ -28,6 +28,17 @@ The installer puts **micboost.app** in `/Applications`. It starts at login and l
 
 Settings come in two flavors: micboost.app, the menu-bar app, and `micboostctl` – terminal TUI/CLI (useful e.g. for agents).
 
+## Switch input when the mic connects
+
+Off by default. Turn it on and plugging the mic in makes BlackHole the system input, so the next
+call goes through micboost with nothing to click; unplugging it hands the input back to the device
+that had it before. A manual change of input while the mic is connected stands — unplugging then
+leaves it alone.
+
+```sh
+micboostctl set AUTO_SWITCH 1     # or the switch in the menu-bar app
+```
+
 ## Noise suppression
 
 Optional, off until you record a noise profile: stay silent for ~6 seconds while micboost averages the spectrum of your room (fans, laptop, street), then it subtracts that from every frame.

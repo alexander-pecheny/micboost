@@ -110,6 +110,9 @@ reload() {
   echo "!! could not load $1"
 }
 reload "$LABEL" "$PLIST"
+# The menu app holds a lock and a second copy exits at once, so a leftover from an earlier build
+# would otherwise stay in the menu bar and the new one would die on launch.
+pkill -x micboostmenu 2>/dev/null || true
 reload "$MENU_LABEL" "$MENU_PLIST"
 
 OUT_NAME=$(sed -n 's/^OUT_NAME=\([^#]*\).*/\1/p' "$CFG_DIR/config" | tail -1 | xargs)
