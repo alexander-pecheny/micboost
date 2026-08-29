@@ -112,7 +112,8 @@ reload() {
 reload "$LABEL" "$PLIST"
 reload "$MENU_LABEL" "$MENU_PLIST"
 
-echo "==> done. Select 'BlackHole 2ch' as your mic in call apps — micboost switches itself on."
+OUT_NAME=$(sed -n 's/^OUT_NAME=\([^#]*\).*/\1/p' "$CFG_DIR/config" | tail -1 | xargs)
+echo "==> done. Select '${OUT_NAME:-BlackHole 2ch}' as your mic in call apps — micboost switches itself on."
 echo "    A 🎙 icon is now in your menu bar: micboost settings and Recording."
 echo "    Quit really quits; start it again from $APP."
 echo "    (Prefer the terminal? micboostctl show / micrec --help)"

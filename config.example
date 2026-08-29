@@ -33,6 +33,7 @@ NR_CAPTURE_SEC=6    # how long a capture listens
 # --- devices (substring match; usually no need to touch) ---
 RODE_NAME=Wireless MICRO
 OUT_NAME=BlackHole
+BUFFER_FRAMES=128   # IO cycle length. 128 costs 5.3 ms, 512 costs 21.3 ms. Raise it if it crackles.
 
 # --- recording (micrec; the menu bar writes these for you) ---
 REC_FORMAT=flac     # flac = lossless, aac = 256 kbit/s

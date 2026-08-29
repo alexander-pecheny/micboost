@@ -6,7 +6,7 @@ Two tools behind one menu-bar icon: a microphone booster and a recorder.
 
 **micboost** boosts your microphone when it's too quiet. Technically it is a headless Core Audio bridge: **mic → high-pass → noise suppression → gain → compressor → limiter → BlackHole 2ch** running as a `launchd` agent. Pick **BlackHole 2ch** as your input device in Meet or Teams and the bridge switches itself on; pick anything else and it switches off.
 
-Latency added: **1.5 ms** normally, **17.5 ms** with noise suppression on.
+Latency added: **1.5 ms** of processing normally, **17.5 ms** with noise suppression on, on top of the two 128-frame IO cycles the bridge itself costs (**5.3 ms**, and `BUFFER_FRAMES` raises it if a loaded machine crackles).
 
 If the mic disappears, which a USB receiver can do by re-enumerating itself mid-call, micboost quits and launchd starts it again on the device that came back. The gap is a second or two instead of the rest of the call.
 

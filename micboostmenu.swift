@@ -432,11 +432,13 @@ final class Model: ObservableObject {
         statusLine = on ? "on" : "off"
     }
 
-    /// Selecting BlackHole as the system input means "route me through micboost", so the bridge
-    /// follows it. A manual flick of the switch stands until the input changes again.
+    /// Selecting micboost's own output device as the system input means "route me through
+    /// micboost", so the bridge follows it. A manual flick of the switch stands until the input
+    /// changes again.
     func systemInputChanged() {
         systemInput = defaultInputName()
-        let want = systemInput.lowercased().contains("blackhole")
+        let out = (cfg.get("OUT_NAME") ?? "BlackHole").lowercased()
+        let want = systemInput.lowercased().contains(out)
         if want != micboostRunning() { setEnabled(want) } else { enabled = want }
     }
 

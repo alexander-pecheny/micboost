@@ -27,6 +27,7 @@
 //   LIMIT_MS    limiter look-ahead, 0 = hard clip (default 1.5)
 //   LIMIT_RELEASE_MS  limiter release             (default 80)
 //   CEIL_DB     output ceiling in dBFS            (default -0.5)
+//   BUFFER_FRAMES  IO cycle length in frames       (default 128)
 
 import Foundation
 import AudioToolbox
@@ -81,6 +82,9 @@ let hpfHz    = max(0, envF("HPF_HZ", 80))
 let limMs    = max(0, envF("LIMIT_MS", 1.5))
 let limRelMs = max(1, envF("LIMIT_RELEASE_MS", 80))
 let ceiling  = pow(10, envF("CEIL_DB", -0.5) / 20)
+// Two IO cycles, one on each unit, are the whole latency of the bridge: 128 frames costs 5.3 ms
+// where the default 512 costs 21.3 ms. Raise it if a loaded machine starts to crackle.
+let bufFrames = UInt32(max(16, min(4096, envF("BUFFER_FRAMES", 128))))
 
 let CONFIG_DIR   = (CONFIG_PATH as NSString).deletingLastPathComponent
 let PROFILE_PATH = CONFIG_DIR + "/noise.profile"
@@ -451,6 +455,7 @@ final class Bridge {
     let nr = Denoiser(maxFrames: 8192)
     var inUnit: AudioUnit!
     var outUnit: AudioUnit!
+    var bufActual: UInt32 = 0
     let maxFrames = 8192
     let scratch: UnsafeMutablePointer<Float>          // interleaved stereo
     let abl: UnsafeMutableAudioBufferListPointer
@@ -486,6 +491,8 @@ final class Bridge {
         }
         var dev = device
         check(AudioUnitSetProperty(u, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &dev, 4), "set device")
+        var frames = bufFrames      // a preference, not a demand: the HAL clamps to what it allows
+        AudioUnitSetProperty(u, kAudioDevicePropertyBufferFrameSize, kAudioUnitScope_Global, 0, &frames, 4)
         var fmt = asbd()
         let sz = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
         if isInput {
@@ -512,6 +519,9 @@ final class Bridge {
         check(AudioUnitSetProperty(outUnit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &ocb, UInt32(MemoryLayout<AURenderCallbackStruct>.size)), "set output cb")
 
         check(AudioUnitInitialize(inUnit),  "init in")
+        var got: UInt32 = 0, gz = UInt32(4)
+        AudioUnitGetProperty(inUnit, kAudioDevicePropertyBufferFrameSize, kAudioUnitScope_Global, 0, &got, &gz)
+        bufActual = got
         check(AudioUnitInitialize(outUnit), "init out")
         check(AudioOutputUnitStart(inUnit),  "start in")
         check(AudioOutputUnitStart(outUnit), "start out")
@@ -556,6 +566,8 @@ let nrState = ["off", "capturing", "active"][nrMode.load(ordering: .acquiring)]
 print("micboost: \(name(r)) -> \(name(o))  gain=\(envF("GAIN_DB",12))dB comp=\(compOn) nr=\(nrState)")
 if nrOn && nrState == "off" { print("micboost: NR=1 but no noise profile — run `micboostctl nr capture`") }
 bridge.start(rode: r, out: o)
+print(String(format: "micboost: %d-frame io cycles, %.1f ms through the bridge",
+             bridge.bufActual, Double(bridge.bufActual) / SR * 2000))
 writeStatus()
 
 // A USB mic can drop off the bus and come back milliseconds later as a different AudioObjectID.
