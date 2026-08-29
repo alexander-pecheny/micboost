@@ -22,3 +22,20 @@ It appears as **micboost**, alongside BlackHole rather than in place of it. To r
 ```sh
 sudo rm -rf /Library/Audio/Plug-Ins/HAL/micboost-loopback.driver && sudo killall coreaudiod
 ```
+
+## What it cost to find out
+
+It loads, it passes audio at the level it was given, and two readers at once both get audio, which
+is the case that can break in BlackHole.
+
+Round trip from the producer's callback to the consumer's, measured with an impulse and the wall
+clock, five pulses each:
+
+| buffer | micboost loopback | BlackHole 2ch |
+|--------|-------------------|---------------|
+| 128    | 5.33 ms           | 5.32 ms       |
+| 512    | 21.35 ms          | 21.33 ms      |
+
+The two drivers are identical to within 0.02 ms, and both are simply two IO cycles: 2 x 128 frames
+is 5.3 ms, 2 x 512 is 21.3 ms. A driver of our own buys no latency at all. The buffer size does,
+and that is micboost's to set, not the device's.
