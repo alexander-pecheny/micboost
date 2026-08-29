@@ -8,6 +8,8 @@ Two tools behind one menu-bar icon: a microphone booster and a recorder.
 
 Latency added: **1.5 ms** normally, **17.5 ms** with noise suppression on.
 
+If the mic disappears, which a USB receiver can do by re-enumerating itself mid-call, micboost quits and launchd starts it again on the device that came back. The gap is a second or two instead of the rest of the call.
+
 **micrec** records your mic together with any app or the whole system, as separate stems that cannot drift apart. See [Recording](#recording).
 
 ## Install

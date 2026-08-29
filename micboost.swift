@@ -558,6 +558,21 @@ if nrOn && nrState == "off" { print("micboost: NR=1 but no noise profile — run
 bridge.start(rode: r, out: o)
 writeStatus()
 
+// A USB mic can drop off the bus and come back milliseconds later as a different AudioObjectID.
+// The units go on rendering from the dead one — silence, or worse, a buzz that the far end hears
+// instead of you. There is nothing to salvage in place, so leave and let launchd start us again on
+// whatever the devices are now; the wait loop above picks them up as they reappear.
+let rName = name(r), oName = name(o)
+var devices = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
+                                         mScope: kAudioObjectPropertyScopeGlobal,
+                                         mElement: kAudioObjectPropertyElementMain)
+AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &devices, .main) { _, _ in
+    let live = Set(deviceIDs())
+    guard !live.contains(r) || !live.contains(o) else { return }
+    print("micboost: \(live.contains(r) ? oName : rName) went away — restarting")
+    exit(0)
+}
+
 signal(SIGUSR1, SIG_IGN)
 let sigSrc = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
 sigSrc.setEventHandler { captureReq.wrappingAdd(1, ordering: .releasing) }
