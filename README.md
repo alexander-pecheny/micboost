@@ -42,9 +42,10 @@ Or press **Capture noise profile** in the menu-bar app. Adds 16 ms of latency wh
 
 Open the menu-bar icon, expand **Recording**, tick what you want, press Record. Sources are your current mic, the whole system output, and every running app; the search box filters them, and the list refreshes while it is open. An app can only be tapped once it has opened an audio stream, so the ones that never have are listed greyed out — apps that play sound, like a browser or Slack, are selectable even while silent. Recordings land in `~/Documents/MicboostRecordings/<timestamp>/` as one stem per source plus a downmix.
 
-Two design choices do the heavy lifting:
+Three design choices do the heavy lifting:
 
 - **Stems cannot drift.** Every source joins a single private aggregate device, so one Core Audio callback delivers all of them and each stem is written from the same buffer. There is no alignment step to get wrong, and none to fix afterwards.
+- **The call app keeps the device to itself.** When micboost is bridging your mic into BlackHole, the mic stem is a tap on micboost's own output, not a second opening of BlackHole. Whatever is on the call stays the only client reading that device, and the tap carries the same processed audio.
 - **A crash cannot cost you the recording.** Capture writes float32 CAF files whose data chunk is left open-ended, so a half-written file is a valid file. `kill -9` mid-call loses at most one 50 ms writer tick, and everything already on disk plays. A low-priority thread encodes the stems and the mix as the raw files grow, so a take is ready moments after it stops; the raw capture is deleted only once every output has been read back and verified.
 
 The mix is summed at unity gain and soft-clipped above -2.5 dBFS, because normalising it would mean waiting for the whole take. When a take matters enough for an exact mix, the lossless stems are there to re-mix from.

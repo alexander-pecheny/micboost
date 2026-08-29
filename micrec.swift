@@ -162,6 +162,43 @@ func micboostPID() -> pid_t? {
     return nil
 }
 
+let MICBOOST_CONFIG = (ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]
+                       ?? NSHomeDirectory() + "/.config") + "/micboost/config"
+
+func micboostSetting(_ key: String) -> String? {
+    guard let text = try? String(contentsOfFile: MICBOOST_CONFIG, encoding: .utf8) else { return nil }
+    for line in text.split(separator: "\n") {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard !t.hasPrefix("#"), let eq = t.firstIndex(of: "="),
+              t[..<eq].trimmingCharacters(in: .whitespaces) == key else { continue }
+        var v = String(t[t.index(after: eq)...])
+        if let h = v.firstIndex(of: "#") { v = String(v[..<h]) }
+        return v.trimmingCharacters(in: .whitespaces)
+    }
+    return nil
+}
+
+/// What `--source mic` records. While micboost bridges the mic into a virtual device, the boosted
+/// feed comes from a tap on micboost itself rather than from that device: a call app already
+/// reading the device can fall silent when a second client opens it, and the tap sounds the same.
+struct MicSource {
+    let device: (id: AudioDeviceID, name: String, uid: String)
+    let micboost: [AudioObjectID]?      // micboost's audio process objects, when it is the mic
+    let name: String
+}
+
+func micSource() -> MicSource? {
+    guard let d = defaultInputDevice() else { return nil }
+    let out = (micboostSetting("OUT_NAME") ?? "BlackHole").lowercased()
+    guard d.name.lowercased().contains(out), let pid = micboostPID() else {
+        return MicSource(device: d, micboost: nil, name: d.name)
+    }
+    let objects = processObjects(ofPID: pid)
+    guard !objects.isEmpty else { return MicSource(device: d, micboost: nil, name: d.name) }
+    let mic = micboostSetting("RODE_NAME").flatMap { inputDevice(named: $0)?.name }
+    return MicSource(device: d, micboost: objects, name: mic ?? "micboost")
+}
+
 func defaultInputDevice() -> (id: AudioDeviceID, name: String, uid: String)? {
     let id: AudioDeviceID = get(SYS, addr(kAudioHardwarePropertyDefaultInputDevice), 0)
     guard id != 0, let uid = getString(id, kAudioDevicePropertyDeviceUID) else { return nil }
@@ -372,24 +409,38 @@ final class Recorder {
         log?.write(("[\(t)] " + s + "\n").data(using: .utf8)!)
     }
 
+    func tapUID(_ d: CATapDescription, _ label: String) -> String? {
+        d.name = "micrec: \(label)"; d.isPrivate = true; d.muteBehavior = .unmuted
+        var t = AudioObjectID(0)
+        let s = AudioHardwareCreateProcessTap(d, &t)
+        guard s == noErr, let uid = getString(t, kAudioTapPropertyUID) else {
+            logLine("could not tap \(label) (\(s))"); return nil
+        }
+        taps.append(t)
+        return uid
+    }
+
     // ---- build the aggregate ----
     // Sub-devices come first in the input stream list, then taps in tap-list order. We assert the
     // channel layout matches what we asked for and refuse to record if it does not, because a
     // mislabelled stem is worse than no recording.
-    func start(mic: (id: AudioDeviceID, name: String, uid: String)?,
-               system: Bool, apps: [AudioApp]) throws {
+    func start(mic: MicSource?, system: Bool, apps: [AudioApp]) throws {
         try FileManager.default.createDirectory(atPath: dir + "/raw", withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: dir + "/micrec.log", contents: nil)
         log = FileHandle(forWritingAtPath: dir + "/micrec.log")
 
         var subDevices: [[String: Any]] = []
         var expected: [(String, String, Int)] = []      // key, display name, channels
+        var tapList: [[String: Any]] = []
         let main: String
 
-        if let m = mic {
-            subDevices.append([kAudioSubDeviceUIDKey: m.uid, kAudioSubDeviceDriftCompensationKey: 0])
-            expected.append(("mic", m.name, max(1, bufferChannels(m.id).reduce(0, +))))
-            main = m.uid
+        // The mic tap has to be the first tap: sub-devices come first in the input stream list and
+        // the clock device contributes none, so this keeps the mic as stem 0 either way.
+        let micTap = mic?.micboost.flatMap { tapUID(CATapDescription(stereoMixdownOfProcesses: $0), "mic") }
+        if let m = mic, micTap == nil {
+            subDevices.append([kAudioSubDeviceUIDKey: m.device.uid, kAudioSubDeviceDriftCompensationKey: 0])
+            expected.append(("mic", m.name, max(1, bufferChannels(m.device.id).reduce(0, +))))
+            main = m.device.uid
         } else {
             guard let c = clockDevice() else {
                 throw NSError(domain: "micrec", code: 1, userInfo: [NSLocalizedDescriptionKey:
@@ -397,36 +448,29 @@ final class Recorder {
             }
             subDevices.append([kAudioSubDeviceUIDKey: c.uid, kAudioSubDeviceDriftCompensationKey: 0])
             main = c.uid
-            logLine("no mic selected — clocking from \(c.name)")
+            if let m = mic, let uid = micTap {
+                tapList.append([kAudioSubTapUIDKey: uid, kAudioSubTapDriftCompensationKey: 1])
+                expected.append(("mic", m.name, 2))
+                logLine("mic from micboost's own output — clocking from \(c.name)")
+            } else {
+                logLine("no mic selected — clocking from \(c.name)")
+            }
         }
 
-        var tapList: [[String: Any]] = []
         var excluded = [AudioObjectID]()
         if let pid = micboostPID() { excluded += processObjects(ofPID: pid) }   // never re-record our own mic feed
         excluded += processObjects(ofPID: getpid())
 
         for app in apps {
-            let d = CATapDescription(stereoMixdownOfProcesses: app.objects)
-            d.name = "micrec: \(app.name)"; d.isPrivate = true; d.muteBehavior = .unmuted
-            var t = AudioObjectID(0)
-            let s = AudioHardwareCreateProcessTap(d, &t)
-            guard s == noErr, let uid = getString(t, kAudioTapPropertyUID) else {
-                logLine("could not tap \(app.name) (\(s)) — skipped"); continue
-            }
-            taps.append(t)
+            guard let uid = tapUID(CATapDescription(stereoMixdownOfProcesses: app.objects), app.name) else { continue }
             tapList.append([kAudioSubTapUIDKey: uid, kAudioSubTapDriftCompensationKey: 1])
             expected.append(("app:" + app.id, app.name, 2))
         }
         if system {
-            let d = CATapDescription(stereoGlobalTapButExcludeProcesses: excluded)
-            d.name = "micrec: system"; d.isPrivate = true; d.muteBehavior = .unmuted
-            var t = AudioObjectID(0)
-            let s = AudioHardwareCreateProcessTap(d, &t)
-            guard s == noErr, let uid = getString(t, kAudioTapPropertyUID) else {
+            guard let uid = tapUID(CATapDescription(stereoGlobalTapButExcludeProcesses: excluded), "system") else {
                 throw NSError(domain: "micrec", code: 2,
-                              userInfo: [NSLocalizedDescriptionKey: "system audio tap failed (\(s))"])
+                              userInfo: [NSLocalizedDescriptionKey: "system audio tap failed"])
             }
-            taps.append(t)
             tapList.append([kAudioSubTapUIDKey: uid, kAudioSubTapDriftCompensationKey: 1])
             expected.append(("system", "System audio", 2))
         }
@@ -790,7 +834,7 @@ func argValues(_ name: String) -> [String] {
 func hasFlag(_ name: String) -> Bool { CommandLine.arguments.contains(name) }
 
 func cmdSources() {
-    let mic = defaultInputDevice()
+    let mic = micSource()
     let apps = audioApps()
     if hasFlag("--json") {
         var list: [[String: Any]] = []
@@ -824,7 +868,7 @@ func cmdStart() {
     let wanted = argValues("--source")
     guard !wanted.isEmpty else { fail("nothing to record — pass --source mic / system / app:<bundle id>") }
 
-    let mic = wanted.contains("mic") ? defaultInputDevice() : nil
+    let mic = wanted.contains("mic") ? micSource() : nil
     if wanted.contains("mic") && mic == nil { fail("no input device is selected") }
     let apps = audioApps().filter { wanted.contains("app:" + $0.id) && $0.tappable }
     for w in wanted where w.hasPrefix("app:") {
