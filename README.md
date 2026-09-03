@@ -32,8 +32,9 @@ Settings come in two flavors: micboost.app, the menu-bar app, and `micboostctl` 
 
 Off by default. Turn it on and plugging the mic in makes BlackHole the system input, so the next
 call goes through micboost with nothing to click; unplugging it hands the input back to the device
-that had it before. A manual change of input while the mic is connected stands — unplugging then
-leaves it alone.
+that had it before. For ten seconds after the mic arrives micboost puts the input back if something
+else grabs it, which is what AirPods reconnecting on wake do. After that a manual change of input
+while the mic is connected stands — unplugging then leaves it alone.
 
 ```sh
 micboostctl set AUTO_SWITCH 1     # or the switch in the menu-bar app

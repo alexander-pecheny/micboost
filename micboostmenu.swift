@@ -25,6 +25,8 @@ let CONFIG_PATH = (ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]
                    ?? NSHomeDirectory() + "/.config") + "/micboost/config"
 let PROFILE_PATH = (CONFIG_PATH as NSString).deletingLastPathComponent + "/noise.profile"
 
+let DEFEND_SEC = 10.0   // how long a fresh auto-switch holds the input against another device
+
 @discardableResult
 func run(_ path: String, _ args: [String], capture: Bool = false) -> String {
     let p = Process()
@@ -382,6 +384,8 @@ final class Model: ObservableObject {
     private var base: [String: String] = [:]
     private var micPresent = false
     private let PREV_INPUT = "inputBeforeMic"
+    private var defendUntil = Date.distantPast
+    private var defences = 0
 
     init() { reload() }
 
@@ -467,6 +471,8 @@ final class Model: ObservableObject {
             if !onMicboost { UserDefaults.standard.set(defaultInputName(), forKey: PREV_INPUT) }
             print("menu: mic connected — input \(defaultInputName()) -> \(out)")
             setDefaultInput(out)
+            defendUntil = Date().addingTimeInterval(DEFEND_SEC)
+            defences = 3
         } else if let prev = UserDefaults.standard.string(forKey: PREV_INPUT), !prev.isEmpty {
             print("menu: mic gone — input back to \(prev)")
             if onMicboost { setDefaultInput(prev) }   // a manual change since the mic arrived wins
@@ -479,8 +485,15 @@ final class Model: ObservableObject {
     /// changes again.
     func systemInputChanged() {
         systemInput = defaultInputName()
-        let out = (cfg.get("OUT_NAME") ?? "BlackHole").lowercased()
-        let want = systemInput.lowercased().contains(out)
+        let out = cfg.get("OUT_NAME") ?? "BlackHole"
+        let want = systemInput.lowercased().contains(out.lowercased())
+        // AirPods reconnecting on wake take the input a few seconds after the mic arrives, which
+        // reads here as "the user chose something else". Nobody opens Sound settings that fast.
+        if !want, micPresent, defences > 0, Date() < defendUntil {
+            defences -= 1
+            print("menu: \(systemInput) took the input — back to \(out)")
+            if setDefaultInput(out) { return }
+        }
         if want != micboostRunning() { setEnabled(want) } else { enabled = want }
     }
 
@@ -948,6 +961,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 // launchd starts this at login and Finder can start it too, so hold a lock and let the first one win.
 let lockFD = open("/tmp/micboostmenu.lock", O_CREAT | O_RDWR, 0o644)
 if lockFD >= 0, flock(lockFD, LOCK_EX | LOCK_NB) != 0 { exit(0) }
+
+setvbuf(stdout, nil, _IOLBF, 0)   // launchd gives us a file, so prints would sit in the buffer for hours
 
 let app = NSApplication.shared
 let delegate = AppDelegate()
